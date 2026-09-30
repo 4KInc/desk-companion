@@ -33,6 +33,8 @@ export class DeskPlacementSystem extends createSystem({
   private reticle?: Entity;
   private searchTimer = 0;
   private session?: XRSession;
+  /** Ignore the pinch that pressed "Move tray" itself. */
+  private placingSince = 0;
   private readonly authoredPosition = new Vector3();
   private readonly authoredYaw = { value: 0 };
   private readonly head = new Vector3();
@@ -95,9 +97,14 @@ export class DeskPlacementSystem extends createSystem({
     }
     const state = this.desk!.getValue(DeskPlacement, 'state');
     if (state !== PlacementState.Searching && state !== PlacementState.Placing) return;
+    if (state === PlacementState.Placing && !this.reticle) {
+      this.showReticle(); // entered Placing from the Move tray button
+      this.placingSince = performance.now();
+    }
 
     this.player.head.getWorldPosition(this.head);
-    const tableY = this.findTableHeight();
+    const manual = this.desk!.getValue(DeskPlacement, 'manual') === true;
+    const tableY = manual ? undefined : this.findTableHeight();
     if (tableY !== undefined) {
       this.player.head.getWorldDirection(this.forward);
       // Object3D.getWorldDirection returns +Z; the camera looks down -Z.
@@ -113,6 +120,7 @@ export class DeskPlacementSystem extends createSystem({
       this.searchTimer -= delta;
       if (this.searchTimer <= 0) {
         this.showReticle();
+        this.placingSince = performance.now();
         this.setState(PlacementState.Placing);
       }
     }
@@ -148,6 +156,7 @@ export class DeskPlacementSystem extends createSystem({
     object.rotation.set(0, yaw, 0);
     this.hideReticle();
     this.setState(PlacementState.Placed, source);
+    this.desk!.setValue(DeskPlacement, 'manual', false);
   }
 
   private showReticle(): void {
@@ -169,6 +178,7 @@ export class DeskPlacementSystem extends createSystem({
   private confirmReticle(): void {
     const reticle = this.reticle;
     if (!reticle || this.desk?.getValue(DeskPlacement, 'state') !== PlacementState.Placing) return;
+    if (performance.now() - this.placingSince < 400) return;
     if (!reticle.getValue(EnvironmentRaycastTarget, 'xrHitTestResult') || !reticle.object3D) return;
     this.player.head.getWorldPosition(this.head);
     reticle.object3D.getWorldPosition(this.point);

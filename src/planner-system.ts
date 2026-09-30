@@ -19,6 +19,7 @@ import {
 } from '@iwsdk/core';
 import { splitBrainDump, type DraftTask } from './brain-dump.js';
 import { adjustEstimate, biasByCategory, biasLine, type Category } from './estimates.js';
+import { DeskSounds } from './sound.js';
 import { speechRecognitionConstructor, type SpeechRecognitionLike } from './speech.js';
 import { DeskPlacement, PlacementState, TaskTile, Zone } from './planner-components.js';
 import {
@@ -69,8 +70,13 @@ const CHEST_BELOW_HEAD = { min: 0.05, max: 0.6 };
 /** Tray-local spot where a focused tile floats, tilted toward the user. */
 const FOCUS_SPOT = { x: 0, y: 0.2, z: 0.1 };
 const FOCUS_TILT = 0.9;
-/** Focus shorter than this is treated as untracked, and the panel asks instead. */
-const MIN_TRACKED_MINUTES = 0.5;
+/**
+ * Focus time only counts as the actual when it is plausible: at least this share of
+ * the estimate and at least MIN_TRACKED_MINUTES. A quick focus-then-jar (the task was
+ * mostly done before focusing) would otherwise teach the model that tasks are tiny.
+ */
+const MIN_TRACKED_SHARE = 0.25;
+const MIN_TRACKED_MINUTES = 2;
 const TOOK_FACTORS = { less: 0.7, same: 1, more: 1.5 } as const;
 const MAX_COMPLETIONS = 300;
 const STACK_ZONES = [Zone.Now, Zone.Later, Zone.Drop] as const;
@@ -81,7 +87,7 @@ const ZONE_CENTRE: Record<(typeof STACK_ZONES)[number], { x: number; z: number }
 };
 const PLACEMENT_STATUS: Record<string, string> = {
   [PlacementState.Searching]: 'Looking for your desk...',
-  [PlacementState.Placing]: 'No table found. Point at your desk and pinch to place the tray',
+  [PlacementState.Placing]: 'Point at your desk and pinch to place the tray',
 };
 
 type TextElement = UIKit.Text;
@@ -127,6 +133,9 @@ export class PlannerSystem extends createSystem({
   private focusTick = 0;
   private focusSaveTick = 0;
   private readonly head = new Vector3();
+  private readonly sounds = new DeskSounds();
+  private readonly soundAt = new Vector3();
+  private wasOverflowing = false;
   private readonly focusTilt = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), FOCUS_TILT);
   private readonly trayRight = new Vector3();
   private saveCountdown = 0;
@@ -140,6 +149,7 @@ export class PlannerSystem extends createSystem({
 
   init(): void {
     this.cleanupFuncs.push(
+      () => this.sounds.dispose(),
       this.queries.held.subscribe('qualify', (entity) => {
         const data = entity.object3D?.userData;
         if (data) {
@@ -233,8 +243,13 @@ export class PlannerSystem extends createSystem({
       const element = panel.getElementById(id);
       if (!element) return;
       element.name = id;
-      element.addEventListener('click', handler);
-      this.cleanupFuncs.push(() => element.removeEventListener('click', handler));
+      const withSound = () => {
+        this.sounds.ensure();
+        this.sounds.play('click');
+        handler();
+      };
+      element.addEventListener('click', withSound);
+      this.cleanupFuncs.push(() => element.removeEventListener('click', withSound));
     };
     on('hours-down', () => this.changeCapacity(-1));
     on('hours-up', () => this.changeCapacity(1));
@@ -270,11 +285,14 @@ export class PlannerSystem extends createSystem({
     }
     on('xr-button', () => this.world.launchXR());
     on('exit-button', () => this.world.exitXR());
+    const moveTray = panel.getElementById('move-tray-button');
+    on('move-tray-button', () => this.startMoveTray());
     this.cleanupFuncs.push(
       this.world.visibilityState.subscribe((visibility) => {
         const is2D = visibility === VisibilityState.NonImmersive;
         xrButton.setProperties({ display: is2D ? 'flex' : 'none' });
         exitButton.setProperties({ display: is2D ? 'none' : 'flex' });
+        moveTray?.setProperties({ display: is2D ? 'none' : 'flex' });
       }),
     );
   }
@@ -320,6 +338,14 @@ export class PlannerSystem extends createSystem({
       this.setStatus('Listening... say what is on your mind, then pinch Done');
     });
     this.cleanupFuncs.push(() => recognition?.abort());
+  }
+
+  /** Hand the tray back to placement: aim at any surface and pinch. */
+  private startMoveTray(): void {
+    const desk = this.queries.desk.entities.values().next().value as Entity | undefined;
+    if (!desk) return;
+    desk.setValue(DeskPlacement, 'manual', true);
+    desk.setValue(DeskPlacement, 'state', PlacementState.Placing);
   }
 
   // --- tasks -------------------------------------------------------------
@@ -415,6 +441,9 @@ export class PlannerSystem extends createSystem({
         total += estimate.minutes;
         this.pushTask({ ...draft, minutes: estimate.minutes });
       }
+      this.soundAt.set(TRAY.inbox.x, TRAY.surfaceY, TRAY.inbox.z);
+      this.tray.localToWorld(this.soundAt);
+      for (let i = 0; i < tasks.length; i++) this.sounds.play('pop', this.soundAt, i * 0.08);
       this.relayout();
       this.scheduleSave();
       this.setStatus(
@@ -490,6 +519,7 @@ export class PlannerSystem extends createSystem({
     }
 
     if (this.isAtChest(this.world3)) {
+      this.sounds.play('focusStart', this.world3);
       this.startFocus(task);
       return;
     }
@@ -499,20 +529,26 @@ export class PlannerSystem extends createSystem({
     this.tray.worldToLocal(this.local3);
     const zone = this.zoneAt(this.local3);
     const wasFocused = this.state.focusTaskId === task.id;
-    if (wasFocused && zone) {
-      // Setting a focused tile back down pauses focus; its tracked time is kept.
+    // Setting a focused tile back down pauses focus; its tracked time is kept.
+    const paused = wasFocused && zone ? `Paused "${task.title}" at ${formatMinutes(Math.round((task.focusMs ?? 0) / 60000))}` : '';
+    if (paused) {
       this.stopFocus();
-      this.setStatus(`Paused "${task.title}" at ${formatMinutes(Math.round((task.focusMs ?? 0) / 60000))}`);
+      this.sounds.play('focusStop', this.world3);
     }
     if (wasFocused && !zone) {
       this.setStatus(`Still focusing on "${task.title}"`);
     } else if (zone && zone !== task.zone) {
       task.zone = zone;
       task.order = this.maxOrder(zone) + 1;
-      this.setStatus(`${task.title} moved to ${zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1)}`);
+      const where = zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1);
+      this.setStatus(paused ? `${paused}, moved to ${where}` : `${task.title} moved to ${where}`);
+    } else if (paused) {
+      this.setStatus(paused);
     } else if (!zone) {
       this.setStatus(`${task.title} went back. Drop it over a zone`);
     }
+    if (zone) this.sounds.play('snap', this.world3);
+    else if (!wasFocused) this.sounds.play('miss', this.world3);
     this.relayout();
     this.scheduleSave();
   }
@@ -539,10 +575,11 @@ export class PlannerSystem extends createSystem({
     this.state.today.doneCount += 1;
     this.state.today.doneMinutes += task.minutes;
     this.state.tasks = this.state.tasks.filter((t) => t.id !== task.id);
+    this.sounds.play('jar', this.jarWorld);
     if (this.state.focusTaskId === task.id) this.stopFocus();
     this.removeTile(task.id, entity);
     const focusMinutes = (task.focusMs ?? 0) / 60000;
-    if (focusMinutes >= MIN_TRACKED_MINUTES) {
+    if (focusMinutes >= Math.max(MIN_TRACKED_MINUTES, task.minutes * MIN_TRACKED_SHARE)) {
       const actual = Math.max(1, Math.round(focusMinutes));
       this.recordCompletion(task.category ?? 'other', task.minutes, actual);
       this.setStatus(`Done: ${task.title} in ${formatMinutes(actual)} (estimated ${formatMinutes(task.minutes)})`);
@@ -550,7 +587,8 @@ export class PlannerSystem extends createSystem({
       this.pendingTook = { title: task.title, minutes: task.minutes, category: task.category ?? 'other' };
       this.setText(
         this.tookText,
-        `How long did "${task.title}" take? You estimated ${formatMinutes(task.minutes)}.`,
+        `How long did "${task.title}" take? You estimated ${formatMinutes(task.minutes)}` +
+          (focusMinutes >= 1 ? ` (focused for ${formatMinutes(Math.round(focusMinutes))}).` : '.'),
       );
       this.setStatus(`Done: ${task.title}. Into the jar`);
     }
@@ -647,6 +685,8 @@ export class PlannerSystem extends createSystem({
 
   /** Flicked left: the tile leaves the tray and waits in tomorrow's pile. */
   private deferTask(entity: Entity, task: StoredTask): void {
+    entity.object3D?.getWorldPosition(this.soundAt);
+    this.sounds.play('whoosh', this.soundAt);
     task.zone = Zone.Tomorrow;
     task.order = this.maxOrder(Zone.Tomorrow) + 1;
     this.state.today.deferredCount += 1;
@@ -697,6 +737,7 @@ export class PlannerSystem extends createSystem({
 
   private confirmEndDay(): void {
     const dropped = endDay(this.state);
+    this.sounds.play('endDay');
     for (const id of dropped) {
       const entity = this.tilesById.get(id);
       if (entity && !entity.hasComponent(Grabbed)) this.removeTile(id, entity);
@@ -756,6 +797,12 @@ export class PlannerSystem extends createSystem({
     });
     if (focused) this.applyLayout(focused, FOCUS_SPOT.x, FOCUS_SPOT.y, FOCUS_SPOT.z, false, true);
 
+    if (anyOverflow && !this.wasOverflowing) {
+      this.soundAt.set(TRAY.zones.Now.x, capacityTop, TRAY.zones.Now.z);
+      this.tray.localToWorld(this.soundAt);
+      this.sounds.play('overflow', this.soundAt);
+    }
+    this.wasOverflowing = anyOverflow;
     this.capacityLine.position.y = capacityTop;
     this.capacityMaterial.color.setHex(anyOverflow ? 0xff5a4f : 0x5fe0d0);
     this.capacityMaterial.opacity = anyOverflow ? 0.5 : 0.35;
@@ -953,6 +1000,7 @@ export class PlannerSystem extends createSystem({
     this.trayRight.set(1, 0, 0).applyQuaternion(this.trayQuat);
     this.trackFlicks(delta);
     this.tickFocus(delta);
+    this.sounds.updateListener(this.player.head);
     const k = 1 - Math.exp(-14 * delta);
     for (const entity of this.queries.resting.entities) {
       const object = entity.object3D;
