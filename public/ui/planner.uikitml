@@ -1,0 +1,127 @@
+<!--
+  Desk Companion planner panel. Horizon kit Panel/Button/ButtonLabel/Divider.
+  Element ids are addressed by src/planner-panel.ts.
+-->
+<style>
+  .panel-root {
+    flex-direction: column;
+    width: 384px;
+    padding-top: 14px;
+    padding-bottom: 16px;
+    padding-left: 18px;
+    padding-right: 18px;
+    gap: 10px;
+  }
+
+  .row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .heading {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 30px;
+    color: #1f2328;
+    flex-grow: 1;
+  }
+
+  .capacity {
+    font-size: 17px;
+    font-weight: 600;
+    color: #1f6f68;
+  }
+
+  .label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #5b616b;
+  }
+
+  .status {
+    font-size: 14px;
+    line-height: 18px;
+    color: #1f2328;
+  }
+
+  .jar {
+    font-size: 14px;
+    font-weight: 600;
+    color: #9a6400;
+  }
+
+  .step-button {
+    justify-content: center;
+  }
+
+  .add-button {
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
+  .xr-button {
+    flex-grow: 1;
+    justify-content: center;
+  }
+
+  .nudge {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #fde2d4;
+    border-color: #e8643c;
+    border-width: 2px;
+  }
+
+  .nudge-text {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 19px;
+    color: #7a2410;
+  }
+
+  .nudge-button {
+    flex-grow: 1;
+    justify-content: center;
+  }
+</style>
+<Panel id="planner-root" class="panel-root">
+  <div class="row">
+    <div id="heading-text" class="heading">Today</div>
+    <Button id="hours-down" class="step-button">
+      <ButtonLabel>-1h</ButtonLabel>
+    </Button>
+    <Button id="hours-up" class="step-button">
+      <ButtonLabel>+1h</ButtonLabel>
+    </Button>
+  </div>
+  <div id="capacity-text" class="capacity">Now 0h / 5h</div>
+  <Divider></Divider>
+  <div class="label">Add task</div>
+  <div class="row">
+    <Button id="add-15" class="add-button"><ButtonLabel>15m</ButtonLabel></Button>
+    <Button id="add-30" class="add-button"><ButtonLabel>30m</ButtonLabel></Button>
+    <Button id="add-60" class="add-button"><ButtonLabel>1h</ButtonLabel></Button>
+    <Button id="add-120" class="add-button"><ButtonLabel>2h</ButtonLabel></Button>
+  </div>
+  <div id="nudge-card" class="nudge" style="display: none">
+    <div id="nudge-text" class="nudge-text">Now is over your day.</div>
+    <div class="row">
+      <Button id="nudge-accept" class="nudge-button"><ButtonLabel>Move to Later</ButtonLabel></Button>
+      <Button id="nudge-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="status-text" class="status">Pinch a tile and drop it in a zone</div>
+  <div id="jar-text" class="jar">Done jar: 0 tasks, 0h</div>
+  <div class="row">
+    <Button id="dictate-button" class="xr-button" style="display: none"><ButtonLabel id="dictate-label">Dictate</ButtonLabel></Button>
+    <Button id="xr-button" class="xr-button"><ButtonLabel>Enter XR</ButtonLabel></Button>
+    <Button id="exit-button" class="xr-button" style="display: none"><ButtonLabel>Exit XR</ButtonLabel></Button>
+  </div>
+</Panel>
