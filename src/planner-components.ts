@@ -23,6 +23,10 @@ export const TaskTile = createComponent('TaskTile', {
   target: { type: Types.Vec3, default: [0, 0, 0] },
   /** True while the tile's top is above the Now capacity line. */
   overflow: { type: Types.Boolean, default: false },
+  /** Floating above the tray in focus mode with a running timer. */
+  focused: { type: Types.Boolean, default: false },
+  /** Total seconds spent on this task in focus mode. */
+  focusSeconds: { type: Types.Float32, default: 0 },
 });
 
 export const PlacementState = {

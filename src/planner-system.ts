@@ -18,6 +18,7 @@ import {
   type Entity,
 } from '@iwsdk/core';
 import { splitBrainDump, type DraftTask } from './brain-dump.js';
+import { adjustEstimate, biasByCategory, biasLine, type Category } from './estimates.js';
 import { speechRecognitionConstructor, type SpeechRecognitionLike } from './speech.js';
 import { DeskPlacement, PlacementState, TaskTile, Zone } from './planner-components.js';
 import {
@@ -36,10 +37,14 @@ import { TRAY } from './scene-assets/day-tray.scene-asset.js';
 import { JAR } from './scene-assets/done-jar.scene-asset.js';
 import {
   createTileMesh,
+  createTimerLabel,
   disposeTileMaterials,
   formatMinutes,
   METRES_PER_MINUTE,
+  setTileDim,
   setTileOverflow,
+  setTimerText,
+  TILE_DEPTH,
   tileThickness,
 } from './task-tile-visual.js';
 
@@ -58,6 +63,16 @@ const FLICK_SPEED = 0.9;
 /** How long a flick's peak speed is remembered, so a release just after the swing still counts. */
 const FLICK_MEMORY = 0.35;
 const DAY_CHECK_SECONDS = 30;
+/** Releasing a tile this close to your head (horizontally) and below it counts as pulling it to your chest. */
+const CHEST_RADIUS = 0.32;
+const CHEST_BELOW_HEAD = { min: 0.05, max: 0.6 };
+/** Tray-local spot where a focused tile floats, tilted toward the user. */
+const FOCUS_SPOT = { x: 0, y: 0.2, z: 0.1 };
+const FOCUS_TILT = 0.9;
+/** Focus shorter than this is treated as untracked, and the panel asks instead. */
+const MIN_TRACKED_MINUTES = 0.5;
+const TOOK_FACTORS = { less: 0.7, same: 1, more: 1.5 } as const;
+const MAX_COMPLETIONS = 300;
 const STACK_ZONES = [Zone.Now, Zone.Later, Zone.Drop] as const;
 const ZONE_CENTRE: Record<(typeof STACK_ZONES)[number], { x: number; z: number }> = {
   [Zone.Now]: TRAY.zones.Now,
@@ -104,6 +119,15 @@ export class PlannerSystem extends createSystem({
   private recapText?: TextElement;
   private dayCheck = DAY_CHECK_SECONDS;
   private recapOpen = false;
+  private tookCard?: UIKit.Container;
+  private tookText?: TextElement;
+  private pendingTook?: { title: string; minutes: number; category: Category };
+  private focusTask?: StoredTask;
+  private focusTimer?: Mesh;
+  private focusTick = 0;
+  private focusSaveTick = 0;
+  private readonly head = new Vector3();
+  private readonly focusTilt = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), FOCUS_TILT);
   private readonly trayRight = new Vector3();
   private saveCountdown = 0;
   private readonly world3 = new Vector3();
@@ -227,6 +251,11 @@ export class PlannerSystem extends createSystem({
     on('winddown-button', () => this.openRecap());
     on('recap-end', () => this.confirmEndDay());
     on('recap-cancel', () => this.closeRecap());
+    this.tookCard = panel.getElementById('took-card') as UIKit.Container | undefined;
+    this.tookText = panel.getElementById('took-text') as TextElement | undefined;
+    on('took-less', () => this.answerTook('less'));
+    on('took-same', () => this.answerTook('same'));
+    on('took-more', () => this.answerTook('more'));
     this.bindDictation(panel, on);
 
     const xrButton = panel.getElementById('xr-button');
@@ -302,6 +331,8 @@ export class PlannerSystem extends createSystem({
       task.priority ??= 2; // tasks saved before priorities existed
       if (task.zone !== Zone.Tomorrow) this.createTile(task, false);
     }
+    if (this.state.focusTaskId && !this.tilesById.has(this.state.focusTaskId)) this.state.focusTaskId = 0;
+    this.applyFocusVisuals();
     this.relayout();
     this.refreshJar();
     if (rolled) {
@@ -345,7 +376,7 @@ export class PlannerSystem extends createSystem({
 
   private addTask(minutes: number): void {
     if (!this.bound) return;
-    const task = this.pushTask({ title: `Task ${this.state.nextId}`, minutes, priority: 2 });
+    const task = this.pushTask({ title: `Task ${this.state.nextId}`, minutes, priority: 2, category: 'other' });
     this.relayout();
     this.setStatus(`Added ${task.title} (${formatMinutes(minutes)}). Pinch it into a zone`);
     this.scheduleSave();
@@ -357,6 +388,7 @@ export class PlannerSystem extends createSystem({
       title: draft.title,
       minutes: draft.minutes,
       priority: draft.priority,
+      category: draft.category,
       zone: Zone.Inbox,
       order: this.maxOrder(Zone.Inbox) + 1,
     };
@@ -373,14 +405,25 @@ export class PlannerSystem extends createSystem({
     this.setStatus('Sorting your brain dump into tasks...');
     try {
       const { tasks, source } = await splitBrainDump(trimmed);
-      for (const draft of tasks) this.pushTask(draft);
+      // Gently correct estimates for kinds of work this person reliably under- or over-estimates.
+      const biases = biasByCategory(this.state.completions);
+      let adjusted = 0;
+      let total = 0;
+      for (const draft of tasks) {
+        const estimate = adjustEstimate(draft.minutes, draft.category, biases);
+        if (estimate.adjusted) adjusted++;
+        total += estimate.minutes;
+        this.pushTask({ ...draft, minutes: estimate.minutes });
+      }
       this.relayout();
       this.scheduleSave();
-      const total = tasks.reduce((sum, task) => sum + task.minutes, 0);
       this.setStatus(
         tasks.length === 0
           ? 'No tasks found in that. Try one task per line'
-          : `${source === 'agent' ? 'Agent made' : 'Made (offline)'} ${tasks.length} tiles, ${formatMinutes(total)} in all. Sort them by hand`,
+          : `${source === 'agent' ? 'Agent made' : 'Made (offline)'} ${tasks.length} tiles, ${formatMinutes(total)} in all.` +
+              (adjusted > 0
+                ? ` Adjusted ${adjusted} ${adjusted === 1 ? 'estimate' : 'estimates'} from your history.`
+                : ' Sort them by hand'),
       );
       return tasks.length;
     } finally {
@@ -446,11 +489,24 @@ export class PlannerSystem extends createSystem({
       return;
     }
 
+    if (this.isAtChest(this.world3)) {
+      this.startFocus(task);
+      return;
+    }
+
     this.tray.updateWorldMatrix(true, false);
     this.local3.copy(this.world3);
     this.tray.worldToLocal(this.local3);
     const zone = this.zoneAt(this.local3);
-    if (zone && zone !== task.zone) {
+    const wasFocused = this.state.focusTaskId === task.id;
+    if (wasFocused && zone) {
+      // Setting a focused tile back down pauses focus; its tracked time is kept.
+      this.stopFocus();
+      this.setStatus(`Paused "${task.title}" at ${formatMinutes(Math.round((task.focusMs ?? 0) / 60000))}`);
+    }
+    if (wasFocused && !zone) {
+      this.setStatus(`Still focusing on "${task.title}"`);
+    } else if (zone && zone !== task.zone) {
       task.zone = zone;
       task.order = this.maxOrder(zone) + 1;
       this.setStatus(`${task.title} moved to ${zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1)}`);
@@ -483,11 +539,110 @@ export class PlannerSystem extends createSystem({
     this.state.today.doneCount += 1;
     this.state.today.doneMinutes += task.minutes;
     this.state.tasks = this.state.tasks.filter((t) => t.id !== task.id);
+    if (this.state.focusTaskId === task.id) this.stopFocus();
     this.removeTile(task.id, entity);
+    const focusMinutes = (task.focusMs ?? 0) / 60000;
+    if (focusMinutes >= MIN_TRACKED_MINUTES) {
+      const actual = Math.max(1, Math.round(focusMinutes));
+      this.recordCompletion(task.category ?? 'other', task.minutes, actual);
+      this.setStatus(`Done: ${task.title} in ${formatMinutes(actual)} (estimated ${formatMinutes(task.minutes)})`);
+    } else {
+      this.pendingTook = { title: task.title, minutes: task.minutes, category: task.category ?? 'other' };
+      this.setText(
+        this.tookText,
+        `How long did "${task.title}" take? You estimated ${formatMinutes(task.minutes)}.`,
+      );
+      this.setStatus(`Done: ${task.title}. Into the jar`);
+    }
+    this.refreshCards();
     this.relayout();
     this.refreshJar();
-    this.setStatus(`Done: ${task.title}. Into the jar`);
     this.scheduleSave();
+  }
+
+  private recordCompletion(category: Category, estimate: number, actual: number): void {
+    this.state.completions.push({ category, estimate, actual });
+    if (this.state.completions.length > MAX_COMPLETIONS) this.state.completions.shift();
+  }
+
+  private answerTook(answer: keyof typeof TOOK_FACTORS): void {
+    const pending = this.pendingTook;
+    if (!pending) return;
+    this.pendingTook = undefined;
+    this.recordCompletion(pending.category, pending.minutes, Math.round(pending.minutes * TOOK_FACTORS[answer]));
+    this.refreshCards();
+    this.relayout();
+    this.setStatus(answer === 'same' ? 'Noted: right on estimate' : `Noted: ${answer === 'less' ? 'quicker' : 'longer'} than estimated`);
+    this.scheduleSave();
+  }
+
+  /** At most one card at a time keeps the panel short: recap, then took, then nudge. */
+  private refreshCards(): void {
+    this.tookCard?.setProperties({ display: this.pendingTook && !this.recapOpen ? 'flex' : 'none' });
+  }
+
+  // --- focus mode ----------------------------------------------------------
+
+  private isAtChest(world: Vector3): boolean {
+    this.player.head.getWorldPosition(this.head);
+    const below = this.head.y - world.y;
+    return (
+      Math.hypot(world.x - this.head.x, world.z - this.head.z) < CHEST_RADIUS &&
+      below > CHEST_BELOW_HEAD.min &&
+      below < CHEST_BELOW_HEAD.max
+    );
+  }
+
+  private startFocus(task: StoredTask): void {
+    if (this.state.focusTaskId && this.state.focusTaskId !== task.id) this.stopFocus();
+    this.state.focusTaskId = task.id;
+    this.applyFocusVisuals();
+    this.relayout();
+    this.setStatus(`Focusing on "${task.title}". Jar it when done, or set it down to pause`);
+    this.scheduleSave();
+  }
+
+  private stopFocus(): void {
+    if (!this.state.focusTaskId) return;
+    this.state.focusTaskId = 0;
+    this.applyFocusVisuals();
+    this.relayout();
+  }
+
+  /** Dims every other tile and moves the timer onto the focused one (or removes it). */
+  private applyFocusVisuals(): void {
+    const focusId = this.state.focusTaskId;
+    this.focusTask = focusId ? this.state.tasks.find((task) => task.id === focusId) : undefined;
+    for (const [id, entity] of this.tilesById) {
+      entity.setValue(TaskTile, 'focused', id === focusId);
+      setTileDim(entity.object3D as Mesh, focusId !== 0 && id !== focusId);
+    }
+    const object = focusId ? this.tilesById.get(focusId)?.object3D : undefined;
+    if (!object || !this.focusTask) {
+      this.focusTimer?.removeFromParent();
+      return;
+    }
+    this.focusTimer ??= createTimerLabel();
+    this.focusTimer.position.set(0, tileThickness(this.focusTask.minutes) / 2 + 0.001, -(TILE_DEPTH / 2 + 0.022));
+    object.add(this.focusTimer);
+    setTimerText(this.focusTimer, (this.focusTask.focusMs ?? 0) / 1000);
+    this.focusTick = 1;
+  }
+
+  private tickFocus(delta: number): void {
+    const task = this.focusTask;
+    if (!task || this.world.visibilityState.peek() === VisibilityState.VisibleBlurred) return;
+    task.focusMs = (task.focusMs ?? 0) + delta * 1000;
+    this.focusTick -= delta;
+    if (this.focusTick > 0) return;
+    this.focusTick = 1;
+    const seconds = task.focusMs / 1000;
+    if (this.focusTimer) setTimerText(this.focusTimer, seconds);
+    this.tilesById.get(task.id)?.setValue(TaskTile, 'focusSeconds', seconds);
+    if (--this.focusSaveTick <= 0) {
+      this.focusSaveTick = 10;
+      this.scheduleSave();
+    }
   }
 
   /** Flicked left: the tile leaves the tray and waits in tomorrow's pile. */
@@ -495,6 +650,7 @@ export class PlannerSystem extends createSystem({
     task.zone = Zone.Tomorrow;
     task.order = this.maxOrder(Zone.Tomorrow) + 1;
     this.state.today.deferredCount += 1;
+    if (this.state.focusTaskId === task.id) this.stopFocus();
     this.removeTile(task.id, entity);
     this.relayout();
     this.refreshJar();
@@ -521,9 +677,12 @@ export class PlannerSystem extends createSystem({
     if (dropping > 0) lines.push(`${dropping} in Drop will be cleared.`);
     if (carrying > 0) lines.push(`${carrying} still in Now ${carrying === 1 ? 'carries' : 'carry'} over.`);
     else if (tomorrow === 0 && dropping === 0) lines.push('Flick unfinished tiles left to push them to tomorrow.');
+    const bias = biasLine(this.state.completions);
+    if (bias) lines.push(bias);
     this.setText(this.recapText, lines.join(' '));
     this.recapOpen = true;
     this.recapCard.setProperties({ display: 'flex' });
+    this.refreshCards();
     this.relayout();
     this.setStatus('Sweep finished tiles into the jar, then End day');
   }
@@ -532,6 +691,7 @@ export class PlannerSystem extends createSystem({
     if (!this.recapOpen) return;
     this.recapOpen = false;
     this.recapCard?.setProperties({ display: 'none' });
+    this.refreshCards();
     this.relayout();
   }
 
@@ -556,14 +716,17 @@ export class PlannerSystem extends createSystem({
   private relayout(): void {
     const byZone = new Map<Zone, StoredTask[]>();
     for (const zone of Object.values(Zone)) byZone.set(zone, []);
-    for (const task of this.state.tasks) byZone.get(task.zone)!.push(task);
+    // The focused tile floats on its own; it keeps its zone but leaves the pile.
+    const focusId = this.state.focusTaskId;
+    const focused = this.focusTask;
+    for (const task of this.state.tasks) if (task.id !== focusId) byZone.get(task.zone)!.push(task);
     for (const list of byZone.values()) {
       list.sort((a, b) => a.order - b.order);
       list.forEach((task, index) => (task.order = index + 1));
     }
 
     const capacityTop = TRAY.surfaceY + this.state.capacityHours * METRES_PER_HOUR;
-    let nowMinutes = 0;
+    let nowMinutes = focused?.zone === Zone.Now ? focused.minutes : 0;
     let anyOverflow = false;
     for (const zone of STACK_ZONES) {
       const centre = ZONE_CENTRE[zone];
@@ -591,6 +754,7 @@ export class PlannerSystem extends createSystem({
       this.applyLayout(task, x, TRAY.surfaceY + columns[column] + h / 2, TRAY.inbox.z, false, topOfColumn);
       columns[column] += h + STACK_GAP;
     });
+    if (focused) this.applyLayout(focused, FOCUS_SPOT.x, FOCUS_SPOT.y, FOCUS_SPOT.z, false, true);
 
     this.capacityLine.position.y = capacityTop;
     this.capacityMaterial.color.setHex(anyOverflow ? 0xff5a4f : 0x5fe0d0);
@@ -631,7 +795,7 @@ export class PlannerSystem extends createSystem({
     }
     this.nudgeKey = `${picks.map((task) => task.id).sort((a, b) => a - b).join(',')}@${this.state.capacityHours}`;
     // Wind-down is for clearing the day, not replanning it: no nudge while the recap is open.
-    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen;
+    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook;
     this.nudgeTaskIds = show ? picks.map((task) => task.id) : [];
     this.nudgeCard?.setProperties({ display: show ? 'flex' : 'none' });
     if (!show) return;
@@ -788,6 +952,7 @@ export class PlannerSystem extends createSystem({
     this.tray.getWorldQuaternion(this.trayQuat);
     this.trayRight.set(1, 0, 0).applyQuaternion(this.trayQuat);
     this.trackFlicks(delta);
+    this.tickFocus(delta);
     const k = 1 - Math.exp(-14 * delta);
     for (const entity of this.queries.resting.entities) {
       const object = entity.object3D;
@@ -800,6 +965,7 @@ export class PlannerSystem extends createSystem({
       object.parent?.worldToLocal(this.world3);
 
       this.targetQuat.copy(this.trayQuat);
+      if (entity.getValue(TaskTile, 'focused')) this.targetQuat.multiply(this.focusTilt);
       if (entity.getValue(TaskTile, 'overflow')) {
         const phase = time * 9 + entity.getValue(TaskTile, 'taskId')!;
         this.wobble.setFromAxisAngle(this.wobbleAxis, Math.sin(phase) * 0.07);

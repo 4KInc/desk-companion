@@ -111,6 +111,32 @@
     color: #173b66;
   }
 
+  .took {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #dff3e4;
+    border-color: #2b8a3e;
+    border-width: 2px;
+  }
+
+  .took-text {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 19px;
+    color: #1d5a2a;
+  }
+
+  .took-button {
+    flex-grow: 1;
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
   .nudge-button {
     flex-grow: 1;
     justify-content: center;
@@ -140,6 +166,14 @@
     <div class="row">
       <Button id="nudge-accept" class="nudge-button"><ButtonLabel>Move to Later</ButtonLabel></Button>
       <Button id="nudge-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="took-card" class="took" style="display: none">
+    <div id="took-text" class="took-text">How long did it take?</div>
+    <div class="row">
+      <Button id="took-less" class="took-button"><ButtonLabel>Quicker</ButtonLabel></Button>
+      <Button id="took-same" class="took-button"><ButtonLabel>About right</ButtonLabel></Button>
+      <Button id="took-more" class="took-button"><ButtonLabel>Longer</ButtonLabel></Button>
     </div>
   </div>
   <div id="recap-card" class="recap" style="display: none">

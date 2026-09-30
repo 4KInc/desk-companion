@@ -3,7 +3,9 @@ import {
   CanvasTexture,
   Color,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
+  PlaneGeometry,
   SRGBColorSpace,
 } from '@iwsdk/core';
 
@@ -116,4 +118,54 @@ export function disposeTileMaterials(mesh: Mesh): void {
     material.map?.dispose();
     material.dispose();
   }
+}
+
+/** Fades a tile back while another one is in focus. Event-driven, not per frame. */
+export function setTileDim(mesh: Mesh, dim: boolean): void {
+  for (const material of new Set(mesh.material as MeshStandardMaterial[])) {
+    if (material.transparent === dim) continue;
+    material.transparent = dim;
+    material.opacity = dim ? 0.3 : 1;
+    material.depthWrite = !dim;
+    material.needsUpdate = true;
+  }
+}
+
+const TIMER_W = 256;
+const TIMER_H = 96;
+
+/** A flat mm:ss label that sits just beyond a focused tile's far edge. */
+export function createTimerLabel(): Mesh {
+  const canvas = document.createElement('canvas');
+  canvas.width = TIMER_W;
+  canvas.height = TIMER_H;
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  const mesh = new Mesh(
+    new PlaneGeometry(0.09, 0.034),
+    new MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }),
+  );
+  mesh.name = 'focus-timer';
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.userData.canvas = canvas;
+  setTimerText(mesh, 0);
+  return mesh;
+}
+
+export function setTimerText(mesh: Mesh, seconds: number): void {
+  const canvas = mesh.userData.canvas as HTMLCanvasElement;
+  const ctx = canvas.getContext('2d')!;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  ctx.clearRect(0, 0, TIMER_W, TIMER_H);
+  ctx.fillStyle = '#1f6f68';
+  ctx.beginPath();
+  ctx.roundRect(4, 4, TIMER_W - 8, TIMER_H - 8, 40);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 60px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${m}:${String(s).padStart(2, '0')}`, TIMER_W / 2, TIMER_H / 2 + 3);
+  ((mesh.material as MeshBasicMaterial).map as CanvasTexture).needsUpdate = true;
 }

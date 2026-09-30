@@ -1,9 +1,12 @@
+import { asCategory, type Category } from './estimates.js';
+
 /** A task suggested from a brain dump, before it becomes a tile. */
 export interface DraftTask {
   title: string;
   minutes: number;
   /** 1 = high, 2 = normal, 3 = low. */
   priority: number;
+  category: Category;
 }
 
 export interface BrainDumpResult {
@@ -31,7 +34,10 @@ export async function splitBrainDump(text: string): Promise<BrainDumpResult> {
     if (response.ok) {
       const body = (await response.json()) as { tasks?: DraftTask[] };
       if (Array.isArray(body.tasks) && body.tasks.length > 0) {
-        return { tasks: body.tasks, source: 'agent' };
+        return {
+          tasks: body.tasks.map((task) => ({ ...task, category: asCategory(task.category) })),
+          source: 'agent',
+        };
       }
     }
   } catch {
@@ -46,6 +52,20 @@ const DURATION = /\(?\b(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minutes
 const QUICK = /\b(email|e-mail|reply|call|text|ping|book|pay|order|send|schedule|check)\b/i;
 const MEDIUM = /\b(meeting|review|sync|standup|1:1|read|plan|fix|update)\b/i;
 const LONG = /\b(write|draft|design|build|implement|refactor|prepare|research|deck|report|finish)\b/i;
+const CATEGORY_KEYWORDS: [Category, RegExp][] = [
+  ['review', /\b(review|feedback|read|proofread)\b/i],
+  ['meetings', /\b(meeting|1:1|one on one|sync|standup|interview|demo day)\b/i],
+  ['communication', /\b(email|e-mail|reply|respond|message|text|ping|call|slack)\b/i],
+  ['writing', /\b(write|draft|doc|docs|report|blog|slides|deck|proposal|notes)\b/i],
+  ['coding', /\b(code|fix|bug|build|implement|refactor|deploy|test|debug|release|pr)\b/i],
+  ['admin', /\b(book|pay|order|schedule|expense|clean|tidy|backlog|appointment|groceries|laundry|plants)\b/i],
+];
+
+function categorise(text: string): Category {
+  for (const [category, pattern] of CATEGORY_KEYWORDS) if (pattern.test(text)) return category;
+  return 'other';
+}
+
 const HIGH = /\b(urgent|asap|today|deadline|due|must|blocking|waiting on me)\b|!/i;
 const LOW = /\b(maybe|someday|if time|if there'?s time|nice to have|optional|eventually)\b/i;
 
@@ -74,6 +94,7 @@ export function splitLocally(text: string): DraftTask[] {
         title: (title.charAt(0).toUpperCase() + title.slice(1)).slice(0, 40),
         minutes: Math.min(240, Math.max(15, Math.round(minutes / 15) * 15)),
         priority: HIGH.test(part) ? 1 : LOW.test(part) ? 3 : 2,
+        category: categorise(part),
       };
     });
 }

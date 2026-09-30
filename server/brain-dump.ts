@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
+import { CATEGORIES } from '../src/estimates.js';
 
 /**
  * Brain dump -> task tiles. Shared by the Vercel function (api/brain-dump.ts)
@@ -17,6 +18,7 @@ const TaskList = z.object({
         title: z.string().describe('Short imperative task title, at most 40 characters'),
         minutes: z.number().int().describe('Realistic estimate in minutes, a multiple of 15, between 15 and 240'),
         priority: z.number().int().describe('1 = must happen today or blocks others, 2 = normal, 3 = nice to have'),
+        category: z.enum(CATEGORIES).describe('The kind of work, used to learn how long this kind of task really takes'),
       }),
     )
     .describe('Actionable tasks in the order they were mentioned'),
@@ -31,6 +33,7 @@ const SYSTEM_PROMPT = `You turn a person's morning brain dump into task cards fo
 - Estimate honest durations: people underestimate, so round up. Use multiples of 15 minutes. If the person states a duration, use it.
 - Split anything over 4 hours into smaller cards.
 - Priority 1 only for things with a deadline today or that other people are waiting on; 3 for explicitly optional items; otherwise 2.
+- Category: writing (docs, reports, drafts, slides), coding (building, fixing, deploying software), meetings (1:1s, syncs, calls with a set time), communication (email, messages, quick calls), review (reviewing or reading others' work), admin (errands, bookings, chores, tidying), other.
 - Return at most 12 cards.`;
 
 let client: Anthropic | undefined;
@@ -57,6 +60,7 @@ function clampTask(task: DraftTask): DraftTask {
     title: task.title.trim().slice(0, 40),
     minutes: Math.min(240, Math.max(15, Math.round(task.minutes / 15) * 15)),
     priority: Math.min(3, Math.max(1, Math.round(task.priority))),
+    category: task.category,
   };
 }
 

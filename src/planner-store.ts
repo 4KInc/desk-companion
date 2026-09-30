@@ -1,3 +1,4 @@
+import type { Category, Completion } from './estimates.js';
 import type { Zone } from './planner-components.js';
 
 export interface StoredTask {
@@ -6,6 +7,9 @@ export interface StoredTask {
   minutes: number;
   /** 1 = high, 2 = normal, 3 = low. */
   priority: number;
+  category?: Category;
+  /** Time spent on this task in focus mode, in milliseconds. */
+  focusMs?: number;
   zone: Zone;
   order: number;
 }
@@ -32,6 +36,10 @@ export interface PlannerState {
   /** Consecutive days ended with a wind-down. */
   streak: number;
   lastEndedDay: string;
+  /** Finished tasks with estimated vs actual time; drives the estimation-bias model. */
+  completions: Completion[];
+  /** Task currently floating in focus mode, or 0. */
+  focusTaskId: number;
 }
 
 const DB_NAME = 'desk-companion';
@@ -49,6 +57,8 @@ export function emptyState(day = localDay()): PlannerState {
     history: [],
     streak: 0,
     lastEndedDay: '',
+    completions: [],
+    focusTaskId: 0,
   };
 }
 
