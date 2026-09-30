@@ -20,7 +20,18 @@ import {
 import { splitBrainDump, type DraftTask } from './brain-dump.js';
 import { speechRecognitionConstructor, type SpeechRecognitionLike } from './speech.js';
 import { DeskPlacement, PlacementState, TaskTile, Zone } from './planner-components.js';
-import { emptyState, loadState, saveState, type PlannerState, type StoredTask } from './planner-store.js';
+import {
+  emptyState,
+  endDay,
+  loadState,
+  localDay,
+  plannedMinutes,
+  previousDay,
+  rollover,
+  saveState,
+  type PlannerState,
+  type StoredTask,
+} from './planner-store.js';
 import { TRAY } from './scene-assets/day-tray.scene-asset.js';
 import { JAR } from './scene-assets/done-jar.scene-asset.js';
 import {
@@ -42,6 +53,11 @@ const INBOX_COLUMNS = 5;
 const INBOX_SPACING = 0.108;
 const STACK_GAP = 0.0004;
 const SAVE_DELAY = 0.6;
+/** Leftward hand speed (m/s, tray-relative) that counts as a flick to tomorrow. */
+const FLICK_SPEED = 0.9;
+/** How long a flick's peak speed is remembered, so a release just after the swing still counts. */
+const FLICK_MEMORY = 0.35;
+const DAY_CHECK_SECONDS = 30;
 const STACK_ZONES = [Zone.Now, Zone.Later, Zone.Drop] as const;
 const ZONE_CENTRE: Record<(typeof STACK_ZONES)[number], { x: number; z: number }> = {
   [Zone.Now]: TRAY.zones.Now,
@@ -84,6 +100,11 @@ export class PlannerSystem extends createSystem({
   private nudgeKey = '';
   private dismissedNudge = '';
   private splitting = false;
+  private recapCard?: UIKit.Container;
+  private recapText?: TextElement;
+  private dayCheck = DAY_CHECK_SECONDS;
+  private recapOpen = false;
+  private readonly trayRight = new Vector3();
   private saveCountdown = 0;
   private readonly world3 = new Vector3();
   private readonly local3 = new Vector3();
@@ -95,9 +116,14 @@ export class PlannerSystem extends createSystem({
 
   init(): void {
     this.cleanupFuncs.push(
-      this.queries.held.subscribe('qualify', () =>
-        this.setStatus('Drop it on Now, Later or Drop, or in the jar when done'),
-      ),
+      this.queries.held.subscribe('qualify', (entity) => {
+        const data = entity.object3D?.userData;
+        if (data) {
+          data.flick = 0;
+          data.tracked = false;
+        }
+        this.setStatus('Drop it on Now, Later or Drop, the jar when done, or flick it left for tomorrow');
+      }),
       this.queries.held.subscribe('disqualify', (entity) => this.onRelease(entity)),
     );
     void loadState().then((saved) => {
@@ -196,6 +222,11 @@ export class PlannerSystem extends createSystem({
     this.nudgeText = panel.getElementById('nudge-text') as TextElement | undefined;
     on('nudge-accept', () => this.acceptNudge());
     on('nudge-dismiss', () => this.dismissNudge());
+    this.recapCard = panel.getElementById('recap-card') as UIKit.Container | undefined;
+    this.recapText = panel.getElementById('recap-text') as TextElement | undefined;
+    on('winddown-button', () => this.openRecap());
+    on('recap-end', () => this.confirmEndDay());
+    on('recap-cancel', () => this.closeRecap());
     this.bindDictation(panel, on);
 
     const xrButton = panel.getElementById('xr-button');
@@ -265,17 +296,51 @@ export class PlannerSystem extends createSystem({
   // --- tasks -------------------------------------------------------------
 
   private spawnSavedTiles(): void {
+    const returning = this.state.tasks.filter((task) => task.zone === Zone.Tomorrow).length;
+    const rolled = rollover(this.state);
     for (const task of this.state.tasks) {
       task.priority ??= 2; // tasks saved before priorities existed
-      this.createTile(task, false);
+      if (task.zone !== Zone.Tomorrow) this.createTile(task, false);
     }
     this.relayout();
     this.refreshJar();
+    if (rolled) {
+      this.scheduleSave();
+      this.setStatus(
+        returning > 0
+          ? `Good morning. ${returning} ${returning === 1 ? 'tile' : 'tiles'} came back from yesterday`
+          : 'Good morning. Brain dump your day to begin',
+      );
+      return;
+    }
     this.setStatus(
       this.state.tasks.length === 0
         ? 'Add a task, then pinch its tile into a zone'
         : 'Pinch a tile and drop it in a zone',
     );
+  }
+
+  /** Live date change (the app was left open overnight): sync tiles with the rolled-over plan. */
+  private applyRollover(): void {
+    if (!rollover(this.state)) return;
+    const kept = new Set(this.state.tasks.map((task) => task.id));
+    for (const [id, entity] of this.tilesById) {
+      if (!kept.has(id) && !entity.hasComponent(Grabbed)) this.removeTile(id, entity);
+    }
+    for (const task of this.state.tasks) {
+      if (task.zone !== Zone.Tomorrow && !this.tilesById.has(task.id)) this.createTile(task, true);
+    }
+    this.relayout();
+    this.refreshJar();
+    this.closeRecap();
+    this.setStatus('A new day. Yesterday\'s tomorrow pile is back in the Inbox');
+    this.scheduleSave();
+  }
+
+  private removeTile(id: number, entity: Entity): void {
+    this.tilesById.delete(id);
+    disposeTileMaterials(entity.object3D as Mesh);
+    entity.dispose();
   }
 
   private addTask(minutes: number): void {
@@ -363,6 +428,13 @@ export class PlannerSystem extends createSystem({
     const task = this.taskFor(entity);
     const object = entity.object3D;
     if (!task || !object || !this.bound) return;
+    const flick = (object.userData.flick as number | undefined) ?? 0;
+    object.userData.flick = 0;
+    object.userData.tracked = false;
+    if (flick > FLICK_SPEED) {
+      this.deferTask(entity, task);
+      return;
+    }
     object.getWorldPosition(this.world3);
 
     this.jar.getWorldPosition(this.jarWorld);
@@ -408,14 +480,73 @@ export class PlannerSystem extends createSystem({
   private completeTask(entity: Entity, task: StoredTask): void {
     this.state.jar.count += 1;
     this.state.jar.minutes += task.minutes;
+    this.state.today.doneCount += 1;
+    this.state.today.doneMinutes += task.minutes;
     this.state.tasks = this.state.tasks.filter((t) => t.id !== task.id);
-    this.tilesById.delete(task.id);
-    const mesh = entity.object3D as Mesh;
-    disposeTileMaterials(mesh);
-    entity.dispose();
+    this.removeTile(task.id, entity);
     this.relayout();
     this.refreshJar();
     this.setStatus(`Done: ${task.title}. Into the jar`);
+    this.scheduleSave();
+  }
+
+  /** Flicked left: the tile leaves the tray and waits in tomorrow's pile. */
+  private deferTask(entity: Entity, task: StoredTask): void {
+    task.zone = Zone.Tomorrow;
+    task.order = this.maxOrder(Zone.Tomorrow) + 1;
+    this.state.today.deferredCount += 1;
+    this.removeTile(task.id, entity);
+    this.relayout();
+    this.refreshJar();
+    this.setStatus(`Pushed "${task.title}" to tomorrow`);
+    this.scheduleSave();
+  }
+
+  // --- wind-down ----------------------------------------------------------
+
+  private openRecap(): void {
+    if (!this.recapCard) return;
+    const count = (zone: Zone) => this.state.tasks.filter((task) => task.zone === zone).length;
+    const planned = plannedMinutes(this.state);
+    const { doneCount, doneMinutes } = this.state.today;
+    const tomorrow = count(Zone.Tomorrow);
+    const dropping = count(Zone.Drop);
+    const carrying = count(Zone.Now);
+    const lines = [
+      doneCount === 0
+        ? `Nothing went in the jar today${planned > 0 ? ` (you planned ${formatMinutes(planned)})` : ''}. That happens.`
+        : `You planned ${formatMinutes(planned)} and finished ${formatMinutes(doneMinutes)}: ${doneCount} ${doneCount === 1 ? 'task' : 'tasks'} in the jar.`,
+    ];
+    if (tomorrow > 0) lines.push(`${tomorrow} pushed to tomorrow.`);
+    if (dropping > 0) lines.push(`${dropping} in Drop will be cleared.`);
+    if (carrying > 0) lines.push(`${carrying} still in Now ${carrying === 1 ? 'carries' : 'carry'} over.`);
+    else if (tomorrow === 0 && dropping === 0) lines.push('Flick unfinished tiles left to push them to tomorrow.');
+    this.setText(this.recapText, lines.join(' '));
+    this.recapOpen = true;
+    this.recapCard.setProperties({ display: 'flex' });
+    this.relayout();
+    this.setStatus('Sweep finished tiles into the jar, then End day');
+  }
+
+  private closeRecap(): void {
+    if (!this.recapOpen) return;
+    this.recapOpen = false;
+    this.recapCard?.setProperties({ display: 'none' });
+    this.relayout();
+  }
+
+  private confirmEndDay(): void {
+    const dropped = endDay(this.state);
+    for (const id of dropped) {
+      const entity = this.tilesById.get(id);
+      if (entity && !entity.hasComponent(Grabbed)) this.removeTile(id, entity);
+    }
+    this.closeRecap();
+    this.relayout();
+    this.refreshJar();
+    this.setStatus(
+      `Day ended. ${this.state.streak}-day streak. See you tomorrow`,
+    );
     this.scheduleSave();
   }
 
@@ -499,7 +630,8 @@ export class PlannerSystem extends createSystem({
       }
     }
     this.nudgeKey = `${picks.map((task) => task.id).sort((a, b) => a - b).join(',')}@${this.state.capacityHours}`;
-    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge;
+    // Wind-down is for clearing the day, not replanning it: no nudge while the recap is open.
+    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen;
     this.nudgeTaskIds = show ? picks.map((task) => task.id) : [];
     this.nudgeCard?.setProperties({ display: show ? 'flex' : 'none' });
     if (!show) return;
@@ -573,7 +705,16 @@ export class PlannerSystem extends createSystem({
     const { count, minutes } = this.state.jar;
     // Fills quickly at first, then ever more slowly, so it never visibly tops out.
     this.jarFill.scale.y = Math.max(0.002, JAR.maxFill * (1 - Math.exp(-count / 40)));
-    this.setText(this.jarText, `Done jar: ${count} ${count === 1 ? 'task' : 'tasks'}, ${formatMinutes(minutes)}`);
+    const tomorrow = this.state.tasks.filter((task) => task.zone === Zone.Tomorrow).length;
+    // A streak is alive if the last ended day is today or yesterday.
+    const alive = this.state.lastEndedDay === this.state.day || this.state.lastEndedDay === previousDay(this.state.day);
+    const streak = alive && this.state.streak > 1 ? this.state.streak : 0;
+    this.setText(
+      this.jarText,
+      `Done jar: ${count} ${count === 1 ? 'task' : 'tasks'}, ${formatMinutes(minutes)}` +
+        (streak > 0 ? `  |  ${streak}-day streak` : '') +
+        (tomorrow > 0 ? `  |  Tomorrow: ${tomorrow}` : ''),
+    );
   }
 
   private setStatus(text: string): void {
@@ -609,6 +750,27 @@ export class PlannerSystem extends createSystem({
     }
   }
 
+  /** Remembers each held tile's recent peak leftward speed (tray-relative) for flick detection. */
+  private trackFlicks(delta: number): void {
+    if (delta <= 0) return;
+    const decay = Math.exp(-delta / FLICK_MEMORY);
+    for (const entity of this.queries.held.entities) {
+      const object = entity.object3D;
+      if (!object) continue;
+      object.getWorldPosition(this.world3);
+      const data = object.userData;
+      if (data.tracked) {
+        const vx = (this.world3.x - (data.lastX as number)) / delta;
+        const vz = (this.world3.z - (data.lastZ as number)) / delta;
+        const leftward = -(vx * this.trayRight.x + vz * this.trayRight.z);
+        data.flick = Math.max(leftward, ((data.flick as number) ?? 0) * decay);
+      }
+      data.lastX = this.world3.x;
+      data.lastZ = this.world3.z;
+      data.tracked = true;
+    }
+  }
+
   update(delta: number, time: number): void {
     if (!this.bound && !this.tryBind()) return;
     if (this.saveCountdown > 0) {
@@ -616,9 +778,16 @@ export class PlannerSystem extends createSystem({
       if (this.saveCountdown <= 0) void saveState(this.state);
     }
     this.syncPlacementStatus();
+    this.dayCheck -= delta;
+    if (this.dayCheck <= 0) {
+      this.dayCheck = DAY_CHECK_SECONDS;
+      if (this.state.day !== localDay()) this.applyRollover();
+    }
 
     this.tray.updateWorldMatrix(true, false);
     this.tray.getWorldQuaternion(this.trayQuat);
+    this.trayRight.set(1, 0, 0).applyQuaternion(this.trayQuat);
+    this.trackFlicks(delta);
     const k = 1 - Math.exp(-14 * delta);
     for (const entity of this.queries.resting.entities) {
       const object = entity.object3D;

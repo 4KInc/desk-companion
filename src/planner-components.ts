@@ -5,6 +5,8 @@ export const Zone = {
   Now: 'now',
   Later: 'later',
   Drop: 'drop',
+  /** Flicked away tonight; hidden until the next day's rollover returns it to the Inbox. */
+  Tomorrow: 'tomorrow',
 } as const;
 export type Zone = (typeof Zone)[keyof typeof Zone];
 

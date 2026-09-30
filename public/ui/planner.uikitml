@@ -86,6 +86,31 @@
     color: #7a2410;
   }
 
+  .recap {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #dcebfb;
+    border-color: #3f7fd0;
+    border-width: 2px;
+  }
+
+  .recap-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #173b66;
+  }
+
+  .recap-text {
+    font-size: 15px;
+    line-height: 19px;
+    color: #173b66;
+  }
+
   .nudge-button {
     flex-grow: 1;
     justify-content: center;
@@ -117,9 +142,18 @@
       <Button id="nudge-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
     </div>
   </div>
+  <div id="recap-card" class="recap" style="display: none">
+    <div class="recap-title">Wind down</div>
+    <div id="recap-text" class="recap-text">Today you planned 0h and finished 0h.</div>
+    <div class="row">
+      <Button id="recap-end" class="nudge-button"><ButtonLabel>End day</ButtonLabel></Button>
+      <Button id="recap-cancel" class="nudge-button"><ButtonLabel>Not yet</ButtonLabel></Button>
+    </div>
+  </div>
   <div id="status-text" class="status">Pinch a tile and drop it in a zone</div>
   <div id="jar-text" class="jar">Done jar: 0 tasks, 0h</div>
   <div class="row">
+    <Button id="winddown-button" class="xr-button"><ButtonLabel>Wind down</ButtonLabel></Button>
     <Button id="dictate-button" class="xr-button" style="display: none"><ButtonLabel id="dictate-label">Dictate</ButtonLabel></Button>
     <Button id="xr-button" class="xr-button"><ButtonLabel>Enter XR</ButtonLabel></Button>
     <Button id="exit-button" class="xr-button" style="display: none"><ButtonLabel>Exit XR</ButtonLabel></Button>
