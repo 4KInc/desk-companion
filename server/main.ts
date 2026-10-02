@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
-import { handleBrainDumpRequest } from './brain-dump.js';
+import { handleBrainDumpRequest, handleSplitRequest } from './brain-dump.js';
 
 /**
  * Production server (Cloud Run): serves the Vite build and the brain-dump API
@@ -112,7 +112,7 @@ function send(res: ServerResponse, status: number, body: string, type = 'applica
   res.end(body);
 }
 
-async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function api(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
   if (req.method === 'POST' && !sameOrigin(req)) {
     send(res, 403, JSON.stringify({ error: 'Forbidden' }));
     return;
@@ -130,8 +130,9 @@ async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
     send(res, 413, JSON.stringify({ error: 'Request too large' }));
     return;
   }
-  const response = await handleBrainDumpRequest(
-    new Request('http://localhost/api/brain-dump', {
+  const handler = pathname === '/api/split-task' ? handleSplitRequest : handleBrainDumpRequest;
+  const response = await handler(
+    new Request(`http://localhost${pathname}`, {
       method: req.method,
       headers: { 'content-type': 'application/json' },
       body,
@@ -169,7 +170,8 @@ async function staticFile(req: IncomingMessage, res: ServerResponse, pathname: s
 
 createServer((req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-  const handled = pathname === '/api/brain-dump' ? api(req, res) : staticFile(req, res, pathname);
+  const isApi = pathname === '/api/brain-dump' || pathname === '/api/split-task';
+  const handled = isApi ? api(req, res, pathname) : staticFile(req, res, pathname);
   handled.catch((error) => {
     console.error('[server]', error);
     if (!res.headersSent) send(res, 500, JSON.stringify({ error: 'Server error' }));

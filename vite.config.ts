@@ -23,11 +23,14 @@ function brainDumpDevApi(): Plugin {
     name: 'desk-companion-brain-dump-api',
     configureServer(server) {
       Object.assign(process.env, loadEnv(server.config.mode, process.cwd(), 'ANTHROPIC_'));
-      server.middlewares.use('/api/brain-dump', async (req, res) => {
+      server.middlewares.use(async (req, res, next) => {
+        const path = (req.url ?? '').split('?')[0];
+        if (path !== '/api/brain-dump' && path !== '/api/split-task') return next();
         const body = req.method === 'POST' ? await readBody(req) : undefined;
-        const { handleBrainDumpRequest } = await server.ssrLoadModule('/server/brain-dump.ts');
-        const response: Response = await handleBrainDumpRequest(
-          new Request('http://localhost/api/brain-dump', {
+        const api = await server.ssrLoadModule('/server/brain-dump.ts');
+        const handler = path === '/api/split-task' ? api.handleSplitRequest : api.handleBrainDumpRequest;
+        const response: Response = await handler(
+          new Request(`http://localhost${path}`, {
             method: req.method,
             headers: { 'content-type': 'application/json' },
             body: body ? new Uint8Array(body) : undefined,

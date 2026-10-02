@@ -10,6 +10,8 @@ export interface StoredTask {
   category?: Category;
   /** Time spent on this task in focus mode, in milliseconds. */
   focusMs?: number;
+  /** The user said Keep to the agent's offer to split this task; don't ask again. */
+  splitDeclined?: boolean;
   zone: Zone;
   order: number;
 }
@@ -48,7 +50,7 @@ const DB_NAME = 'desk-companion';
 const STORE = 'state';
 const KEY = 'planner';
 
-export function emptyState(day = localDay()): PlannerState {
+export function emptyState(day = planDay()): PlannerState {
   return {
     nextId: 1,
     capacityHours: 5,
@@ -63,6 +65,14 @@ export function emptyState(day = localDay()): PlannerState {
     focusTaskId: 0,
     onboarding: { lineSeen: false, done: false },
   };
+}
+
+/** The plan day starts at 4 a.m. local, so working past midnight still counts as "today". */
+export const DAY_START_HOUR = 4;
+
+/** The plan day a moment belongs to: the local date, shifted back by DAY_START_HOUR. */
+export function planDay(date = new Date()): string {
+  return localDay(new Date(date.getTime() - DAY_START_HOUR * 60 * 60 * 1000));
 }
 
 /** YYYY-MM-DD in the device's local time zone. */
@@ -113,7 +123,7 @@ export function endDay(state: PlannerState): number[] {
  * cleared and today's totals reset. Now and Later carry over untouched. Returns
  * false when `today` is still the plan's day.
  */
-export function rollover(state: PlannerState, today = localDay()): boolean {
+export function rollover(state: PlannerState, today = planDay()): boolean {
   if (state.day === today) return false;
   // Keep a record of every day with finished work, ended or not, so the jar's weekly
   // layers never lose a day. Work done after End day updates that day's record.

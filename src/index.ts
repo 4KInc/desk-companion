@@ -4,6 +4,10 @@ import { mountBrainDumpOverlay } from './brain-dump-overlay.js';
 import { DeskPlacementSystem } from './desk-placement-system.js';
 import { PlannerSystem } from './planner-system.js';
 
+// The done jar "never resets": ask the browser not to evict saved state under storage
+// pressure. Denial is fine; the app still works, it just has no eviction guarantee.
+void navigator.storage?.persist?.().catch(() => false);
+
 World.create(
   document.getElementById('scene-container') as HTMLDivElement,
   projectOptions,

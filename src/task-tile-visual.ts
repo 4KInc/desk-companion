@@ -113,18 +113,30 @@ export function createTileMesh(title: string, minutes: number, priority = 2): Me
 }
 
 export function setTileOverflow(mesh: Mesh, overflow: boolean): void {
+  mesh.userData.overflow = overflow;
+  applyTileGlow(mesh);
+}
+
+/** Highlights the tile a hand is about to grab. */
+export function setTileHover(mesh: Mesh, hover: boolean): void {
+  mesh.userData.hover = hover;
+  applyTileGlow(mesh);
+}
+
+/** One place combines overflow (red) and hover (brighter) so neither undoes the other. */
+function applyTileGlow(mesh: Mesh): void {
   const [side, top] = mesh.material as MeshStandardMaterial[];
+  const overflow = mesh.userData.overflow === true;
+  const hover = mesh.userData.hover === true;
   if (overflow) {
     side.emissive.copy(OVERFLOW);
-    side.emissiveIntensity = 0.9;
     top.emissive.copy(OVERFLOW);
-    top.emissiveIntensity = 0.55;
   } else {
     side.emissive.setHex(mesh.userData.baseColor as number);
-    side.emissiveIntensity = 0.25;
     top.emissive.setHex(0xffffff);
-    top.emissiveIntensity = 0.35;
   }
+  side.emissiveIntensity = (overflow ? 0.9 : 0.25) + (hover ? 0.5 : 0);
+  top.emissiveIntensity = (overflow ? 0.55 : 0.35) + (hover ? 0.3 : 0);
 }
 
 /** Frees the per-tile materials and label texture. */

@@ -94,3 +94,70 @@ export async function handleBrainDumpRequest(request: Request): Promise<Response
     return Response.json({ error: 'Agent unavailable' }, { status: 503 });
   }
 }
+
+// --- split a big task -----------------------------------------------------------
+
+const SubtaskList = z.object({
+  subtasks: z
+    .array(
+      z.object({
+        title: z.string().describe('Short imperative step title, at most 40 characters'),
+        minutes: z.number().int().describe('Estimate in minutes, a multiple of 15'),
+      }),
+    )
+    .describe('2 to 4 concrete steps, in the order they would be done'),
+});
+
+export type DraftSubtask = z.infer<typeof SubtaskList>['subtasks'][number];
+
+const SPLIT_PROMPT = `You break one large task from someone's day plan into 2 to 4 smaller, concrete steps.
+
+- Each step is something that could be finished in one sitting, named as a short imperative phrase (at most 40 characters) that keeps the person's own words.
+- The step estimates should add up to roughly the original estimate (within 25%). Use multiples of 15 minutes.
+- Do not add steps the person did not imply, and do not include a step that just restates the whole task.`;
+
+export async function splitTask(title: string, minutes: number): Promise<DraftSubtask[]> {
+  client ??= new Anthropic();
+  const response = await client.beta.messages.parse({
+    model: 'claude-opus-5-5',
+    max_tokens: 2000,
+    output_config: { effort: 'low', format: betaZodOutputFormat(SubtaskList) },
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    system: SPLIT_PROMPT,
+    messages: [{ role: 'user', content: `Task: ${title}\nEstimate: ${minutes} minutes` }],
+  });
+  if (response.stop_reason === 'refusal' || !response.parsed_output) return [];
+  const steps = response.parsed_output.subtasks
+    .map((step) => ({
+      title: step.title.trim().slice(0, 40),
+      minutes: Math.min(240, Math.max(15, Math.round(step.minutes / 15) * 15)),
+    }))
+    .filter((step) => step.title.length > 0);
+  return steps.length >= 2 && steps.length <= 4 ? steps : [];
+}
+
+/** Web-standard handler: POST { title, minutes } -> { subtasks }. */
+export async function handleSplitRequest(request: Request): Promise<Response> {
+  if (request.method !== 'POST') return Response.json({ error: 'POST only' }, { status: 405 });
+  let title = '';
+  let minutes = 0;
+  try {
+    const body = (await request.json()) as { title?: unknown; minutes?: unknown };
+    title = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
+    minutes = typeof body.minutes === 'number' ? body.minutes : 0;
+  } catch {
+    return Response.json({ error: 'Expected JSON { title, minutes }' }, { status: 400 });
+  }
+  if (!title || minutes < 30 || minutes > 480) {
+    return Response.json({ error: 'Need a title and 30 to 480 minutes' }, { status: 400 });
+  }
+  try {
+    return Response.json({ subtasks: await splitTask(title, minutes) });
+  } catch (error) {
+    if (error instanceof Anthropic.RateLimitError) return Response.json({ error: 'Rate limited' }, { status: 429 });
+    if (error instanceof Anthropic.APIError) return Response.json({ error: 'Agent error' }, { status: 502 });
+    console.error('[split-task] failed:', error instanceof Error ? error.name : typeof error);
+    return Response.json({ error: 'Agent unavailable' }, { status: 503 });
+  }
+}

@@ -157,6 +157,33 @@
     justify-content: center;
   }
 
+  .split {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #ece8fd;
+    border-color: #6741d9;
+    border-width: 2px;
+  }
+
+  .split-text {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 19px;
+    color: #3b2a8c;
+  }
+
+  .undo-button {
+    flex-shrink: 0;
+    justify-content: center;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
   .nudge-button {
     flex-grow: 1;
     justify-content: center;
@@ -191,6 +218,13 @@
       <Button id="nudge-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
     </div>
   </div>
+  <div id="split-card" class="split" style="display: none">
+    <div id="split-text" class="split-text">That is a big one. Split it into smaller steps?</div>
+    <div class="row">
+      <Button id="split-accept" class="nudge-button"><ButtonLabel>Split it</ButtonLabel></Button>
+      <Button id="split-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
+    </div>
+  </div>
   <div id="took-card" class="took" style="display: none">
     <div id="took-text" class="took-text">How long did it take?</div>
     <div class="row">
@@ -207,7 +241,10 @@
       <Button id="recap-cancel" class="nudge-button"><ButtonLabel>Not yet</ButtonLabel></Button>
     </div>
   </div>
-  <div id="status-text" class="status">Pinch a tile and drop it in a zone</div>
+  <div id="status-row" class="row">
+    <div id="status-text" class="status" style="flex-grow: 1; flex-shrink: 1">Pinch a tile and drop it in a zone</div>
+    <Button id="undo-button" class="undo-button" style="display: none"><ButtonLabel>Undo</ButtonLabel></Button>
+  </div>
   <div id="jar-text" class="jar">Done jar: 0 tasks, 0h</div>
   <div class="row">
     <Button id="winddown-button" class="xr-button"><ButtonLabel id="winddown-label">Wind down</ButtonLabel></Button>

@@ -98,3 +98,40 @@ export function splitLocally(text: string): DraftTask[] {
       };
     });
 }
+
+export interface DraftSubtask {
+  title: string;
+  minutes: number;
+}
+
+/**
+ * Breaks one big task into 2-4 steps. The agent names real steps; offline, the
+ * task is split into equal numbered parts so the action still works.
+ */
+export async function splitTaskSteps(title: string, minutes: number): Promise<{ steps: DraftSubtask[]; source: 'agent' | 'local' }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}api/split-task`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title, minutes }),
+      signal: controller.signal,
+    });
+    if (response.ok) {
+      const body = (await response.json()) as { subtasks?: DraftSubtask[] };
+      if (Array.isArray(body.subtasks) && body.subtasks.length >= 2) return { steps: body.subtasks, source: 'agent' };
+    }
+  } catch {
+    // fall through to the local split
+  } finally {
+    clearTimeout(timer);
+  }
+  const parts = minutes >= 180 ? 3 : 2;
+  const each = Math.max(15, Math.round(minutes / parts / 15) * 15);
+  const steps = Array.from({ length: parts }, (_, i) => ({
+    title: `${title.slice(0, 30)} (${i + 1}/${parts})`,
+    minutes: each,
+  }));
+  return { steps, source: 'local' };
+}

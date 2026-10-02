@@ -16,7 +16,8 @@ export type SoundKind =
   | 'focusStop'
   | 'click'
   | 'pop'
-  | 'endDay';
+  | 'endDay'
+  | 'crack';
 
 export class DeskSounds {
   private ctx?: AudioContext;
@@ -157,6 +158,11 @@ export class DeskSounds {
         break;
       case 'pop':
         this.tone(ctx, out, 'sine', 620, 940, t, 0.09, 0.2);
+        break;
+      case 'crack':
+        // A dry snap: short bright noise burst over a low thump.
+        this.hiss(ctx, out, t, 0.06, 1800, 0.45);
+        this.tone(ctx, out, 'sine', 140, 70, t, 0.12, 0.35);
         break;
       case 'endDay':
         [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) =>

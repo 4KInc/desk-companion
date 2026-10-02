@@ -19,10 +19,10 @@ import {
   VisibilityState,
   type Entity,
 } from '@iwsdk/core';
-import { splitBrainDump, type DraftTask } from './brain-dump.js';
+import { splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { CoachVisuals } from './coach.js';
-import { adjustEstimate, biasByCategory, biasLine, type Category } from './estimates.js';
+import { adjustEstimate, biasByCategory, biasLine, MIN_SAMPLES, type Category } from './estimates.js';
 import { DeskSounds } from './sound.js';
 import { speechRecognitionConstructor, type SpeechRecognitionLike } from './speech.js';
 import { DeskPlacement, PlacementState, TaskTile, Zone } from './planner-components.js';
@@ -31,7 +31,7 @@ import {
   endDay,
   jarLayers,
   loadState,
-  localDay,
+  planDay,
   plannedMinutes,
   previousDay,
   rollover,
@@ -48,6 +48,7 @@ import {
   formatMinutes,
   METRES_PER_MINUTE,
   setTileDim,
+  setTileHover,
   setTileOverflow,
   setTimerText,
   TILE_DEPTH,
@@ -68,6 +69,15 @@ const SAVE_DELAY = 0.6;
 const FLICK_SPEED = 0.9;
 /** How long a flick's peak speed is remembered, so a release just after the swing still counts. */
 const FLICK_MEMORY = 0.35;
+/** A flick must also carry the tile this far to the left: a speed spike alone is tracking noise. */
+const FLICK_MIN_TRAVEL = 0.12;
+/** How long the Undo button stays up after a destructive action. */
+const UNDO_SECONDS = 8;
+/** A grabbable tile within this distance of a hand lifts and glows, so the pinch closes in free air. */
+const HOVER_RADIUS = 0.1;
+const HOVER_LIFT = 0.015;
+/** Tiles this long landing in Now get the agent's offer to split them into steps. */
+const SPLIT_MIN_MINUTES = 120;
 const DAY_CHECK_SECONDS = 30;
 /** Releasing a tile this close to your head (horizontally) and below it counts as pulling it to your chest. */
 const CHEST_RADIUS = 0.32;
@@ -144,6 +154,23 @@ export class PlannerSystem extends createSystem({
   private canDictate = false;
   private capacityTop = 0;
   private resetting = false;
+  private undoButton?: UIKit.Component;
+  private undo?: {
+    kind: 'defer' | 'jar' | 'drop';
+    task: StoredTask;
+    zone: Zone;
+    order: number;
+    completionsBefore: number;
+  };
+  private undoTimer = 0;
+  private splitCard?: UIKit.Container;
+  private splitText?: TextElement;
+  private splitOffer?: StoredTask;
+  private splitBusy = false;
+  private hovered?: Entity;
+  private readonly hoverPos = new Vector3();
+  private readonly gripLeft = new Vector3();
+  private readonly gripRight = new Vector3();
   private recapCard?: UIKit.Container;
   private recapText?: TextElement;
   private dayCheck = DAY_CHECK_SECONDS;
@@ -309,6 +336,12 @@ export class PlannerSystem extends createSystem({
     on('recap-cancel', () => this.closeRecap());
     this.tookCard = panel.getElementById('took-card') as UIKit.Container | undefined;
     this.tookText = panel.getElementById('took-text') as TextElement | undefined;
+    this.undoButton = panel.getElementById('undo-button') as UIKit.Component | undefined;
+    this.splitCard = panel.getElementById('split-card') as UIKit.Container | undefined;
+    this.splitText = panel.getElementById('split-text') as TextElement | undefined;
+    on('split-accept', () => void this.acceptSplit());
+    on('split-dismiss', () => this.dismissSplit());
+    on('undo-button', () => this.performUndo());
     on('took-less', () => this.answerTook('less'));
     on('took-same', () => this.answerTook('same'));
     on('took-more', () => this.answerTook('more'));
@@ -493,6 +526,7 @@ export class PlannerSystem extends createSystem({
   }
 
   private removeTile(id: number, entity: Entity): void {
+    if (this.hovered === entity) this.hovered = undefined;
     this.tilesById.delete(id);
     disposeTileMaterials(entity.object3D as Mesh);
     entity.dispose();
@@ -599,13 +633,19 @@ export class PlannerSystem extends createSystem({
     const object = entity.object3D;
     if (!task || !object || !this.bound) return;
     const flick = (object.userData.flick as number | undefined) ?? 0;
+    object.getWorldPosition(this.world3);
+    const travel = object.userData.tracked
+      ? -(
+          (this.world3.x - (object.userData.startX as number)) * this.trayRight.x +
+          (this.world3.z - (object.userData.startZ as number)) * this.trayRight.z
+        )
+      : 0;
     object.userData.flick = 0;
     object.userData.tracked = false;
-    if (flick > FLICK_SPEED) {
+    if (flick > FLICK_SPEED && travel > FLICK_MIN_TRAVEL) {
       this.deferTask(entity, task);
       return;
     }
-    object.getWorldPosition(this.world3);
 
     this.jar.getWorldPosition(this.jarWorld);
     const dx = this.world3.x - this.jarWorld.x;
@@ -636,8 +676,11 @@ export class PlannerSystem extends createSystem({
     if (wasFocused && !zone) {
       this.setStatus(`Still focusing on "${task.title}"`);
     } else if (zone && zone !== task.zone) {
+      const from = { zone: task.zone, order: task.order };
       task.zone = zone;
       task.order = this.maxOrder(zone) + 1;
+      if (zone === Zone.Drop) this.offerUndo('drop', task, from.zone, from.order);
+      if (zone === Zone.Now && task.minutes >= SPLIT_MIN_MINUTES && !task.splitDeclined) this.offerSplit(task);
       const where = zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1);
       this.setStatus(paused ? `${paused}, moved to ${where}` : `${task.title} moved to ${where}`);
     } else if (paused) {
@@ -668,6 +711,7 @@ export class PlannerSystem extends createSystem({
   }
 
   private completeTask(entity: Entity, task: StoredTask): void {
+    this.offerUndo('jar', task, task.zone, task.order);
     this.state.jar.count += 1;
     this.state.jar.minutes += task.minutes;
     this.state.today.doneCount += 1;
@@ -715,6 +759,72 @@ export class PlannerSystem extends createSystem({
   /** At most one card at a time keeps the panel short: recap, then took, then nudge. */
   private refreshCards(): void {
     this.tookCard?.setProperties({ display: this.pendingTook && !this.recapOpen ? 'flex' : 'none' });
+    this.splitCard?.setProperties({
+      display: this.splitOffer && !this.recapOpen && !this.pendingTook ? 'flex' : 'none',
+    });
+  }
+
+  // --- split a big task (agent) --------------------------------------------
+
+  private offerSplit(task: StoredTask): void {
+    this.splitOffer = task;
+    this.setText(this.splitText, `"${task.title}" is ${formatMinutes(task.minutes)}. Split it into smaller steps?`);
+    this.refreshCards();
+  }
+
+  private dismissSplit(): void {
+    if (this.splitOffer) this.splitOffer.splitDeclined = true;
+    this.splitOffer = undefined;
+    this.refreshCards();
+    this.relayout();
+    this.scheduleSave();
+  }
+
+  /** The agent restructures the plan in space: the tile cracks into its steps. */
+  private async acceptSplit(): Promise<void> {
+    const parent = this.splitOffer;
+    if (!parent || this.splitBusy) return;
+    this.splitBusy = true;
+    this.setText(this.splitText, `Breaking "${parent.title}" into steps...`);
+    try {
+      const { steps, source } = await splitTaskSteps(parent.title, parent.minutes);
+      const entity = this.tilesById.get(parent.id);
+      // The tile may have been jarred, flicked or moved while the agent was thinking.
+      if (!entity || !this.state.tasks.includes(parent) || entity.hasComponent(Grabbed)) return;
+      const origin = new Vector3();
+      entity.object3D?.getWorldPosition(origin);
+      if (this.state.focusTaskId === parent.id) this.stopFocus();
+      this.state.tasks = this.state.tasks.filter((task) => task !== parent);
+      this.removeTile(parent.id, entity);
+      this.sounds.play('crack', origin);
+      steps.forEach((step, i) => {
+        const task: StoredTask = {
+          id: this.state.nextId++,
+          title: step.title,
+          minutes: step.minutes,
+          priority: parent.priority,
+          category: parent.category,
+          zone: parent.zone,
+          order: parent.order + i * 0.01,
+          splitDeclined: true,
+        };
+        this.state.tasks.push(task);
+        this.createTile(task, false);
+        const mesh = this.tilesById.get(task.id)?.object3D;
+        if (mesh) mesh.userData.spawnAt = origin.clone().add(new Vector3((i - (steps.length - 1) / 2) * 0.03, 0.02, 0));
+        this.sounds.play('pop', origin, 0.08 + i * 0.07);
+      });
+      const total = steps.reduce((sum, step) => sum + step.minutes, 0);
+      this.setStatus(
+        `${source === 'agent' ? 'Agent split' : 'Split (offline)'} "${parent.title}" into ${steps.length} steps, ${formatMinutes(total)}`,
+      );
+    } finally {
+      this.splitBusy = false;
+      this.splitOffer = undefined;
+      this.refreshCards();
+      this.relayout();
+      this.scheduleSave();
+    }
   }
 
   // --- focus mode ----------------------------------------------------------
@@ -785,6 +895,7 @@ export class PlannerSystem extends createSystem({
   private deferTask(entity: Entity, task: StoredTask): void {
     entity.object3D?.getWorldPosition(this.soundAt);
     this.sounds.play('whoosh', this.soundAt);
+    this.offerUndo('defer', task, task.zone, task.order);
     task.zone = Zone.Tomorrow;
     task.order = this.maxOrder(Zone.Tomorrow) + 1;
     this.state.today.deferredCount += 1;
@@ -793,6 +904,50 @@ export class PlannerSystem extends createSystem({
     this.relayout();
     this.refreshJar();
     this.setStatus(`Pushed "${task.title}" to tomorrow`);
+    this.scheduleSave();
+  }
+
+  // --- undo -----------------------------------------------------------------
+
+  /** Remembers the last destructive action so one pinch can reverse it for a few seconds. */
+  private offerUndo(kind: 'defer' | 'jar' | 'drop', task: StoredTask, zone: Zone, order: number): void {
+    this.undo = { kind, task, zone, order, completionsBefore: this.state.completions.length };
+    this.undoTimer = UNDO_SECONDS;
+    this.undoButton?.setProperties({ display: 'flex' });
+  }
+
+  private clearUndo(): void {
+    this.undo = undefined;
+    this.undoTimer = 0;
+    this.undoButton?.setProperties({ display: 'none' });
+  }
+
+  private performUndo(): void {
+    const undo = this.undo;
+    if (!undo) return;
+    this.clearUndo();
+    const { task } = undo;
+    if (undo.kind === 'jar') {
+      // Take it back out of the jar: counts, today's totals and any learning it produced.
+      this.state.jar.count = Math.max(0, this.state.jar.count - 1);
+      this.state.jar.minutes = Math.max(0, this.state.jar.minutes - task.minutes);
+      this.state.today.doneCount = Math.max(0, this.state.today.doneCount - 1);
+      this.state.today.doneMinutes = Math.max(0, this.state.today.doneMinutes - task.minutes);
+      if (this.state.completions.length > undo.completionsBefore) {
+        this.state.completions.splice(undo.completionsBefore, 1);
+      }
+      if (this.pendingTook?.title === task.title) this.pendingTook = undefined;
+      this.state.tasks.push(task);
+    }
+    if (undo.kind === 'defer') this.state.today.deferredCount = Math.max(0, this.state.today.deferredCount - 1);
+    task.zone = undo.zone;
+    task.order = undo.order - 0.5; // back to its old place in the pile
+    if (!this.tilesById.has(task.id)) this.createTile(task, true);
+    this.sounds.play('pop');
+    this.refreshCards();
+    this.relayout();
+    this.refreshJar();
+    this.setStatus(`Undone: "${task.title}" is back`);
     this.scheduleSave();
   }
 
@@ -817,6 +972,8 @@ export class PlannerSystem extends createSystem({
     else if (tomorrow === 0 && dropping === 0) lines.push('Flick unfinished tiles left to push them to tomorrow.');
     const bias = biasLine(this.state.completions);
     if (bias) lines.push(bias);
+    else if (this.state.completions.length < MIN_SAMPLES) lines.push("I'll learn how long your tasks really take after a few finished days.");
+    else lines.push('Your estimates are on track so far.');
     this.setText(this.recapText, lines.join(' '));
     this.recapOpen = true;
     this.recapCard.setProperties({ display: 'flex' });
@@ -942,7 +1099,8 @@ export class PlannerSystem extends createSystem({
     }
     this.nudgeKey = `${picks.map((task) => task.id).sort((a, b) => a - b).join(',')}@${this.state.capacityHours}`;
     // Wind-down is for clearing the day, not replanning it: no nudge while the recap is open.
-    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook;
+    const show =
+      picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook && !this.splitOffer;
     this.nudgeTaskIds = show ? picks.map((task) => task.id) : [];
     this.nudgeCard?.setProperties({ display: show ? 'flex' : 'none' });
     if (!show) return;
@@ -1082,6 +1240,36 @@ export class PlannerSystem extends createSystem({
     }
   }
 
+  /** Finds the grabbable tile nearest either hand (within HOVER_RADIUS) and marks it hovered. */
+  private updateHover(): void {
+    const grips = this.player.gripSpaces;
+    const hasLeft = grips.left !== undefined;
+    const hasRight = grips.right !== undefined;
+    if (hasLeft) grips.left!.getWorldPosition(this.gripLeft);
+    if (hasRight) grips.right!.getWorldPosition(this.gripRight);
+    let best: Entity | undefined;
+    let bestDistance = HOVER_RADIUS;
+    if (hasLeft || hasRight) {
+      for (const entity of this.queries.resting.entities) {
+        const object = entity.object3D;
+        if (!object || !entity.hasComponent(OneHandGrabbable) || entity.getValue(TaskTile, 'focused')) continue;
+        object.getWorldPosition(this.hoverPos);
+        const d = Math.min(
+          hasLeft ? this.hoverPos.distanceTo(this.gripLeft) : Infinity,
+          hasRight ? this.hoverPos.distanceTo(this.gripRight) : Infinity,
+        );
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = entity;
+        }
+      }
+    }
+    if (best === this.hovered) return;
+    if (this.hovered?.object3D) setTileHover(this.hovered.object3D as Mesh, false);
+    if (best?.object3D) setTileHover(best.object3D as Mesh, true);
+    this.hovered = best;
+  }
+
   /** Remembers each held tile's recent peak leftward speed (tray-relative) for flick detection. */
   private trackFlicks(delta: number): void {
     if (delta <= 0) return;
@@ -1096,6 +1284,10 @@ export class PlannerSystem extends createSystem({
         const vz = (this.world3.z - (data.lastZ as number)) / delta;
         const leftward = -(vx * this.trayRight.x + vz * this.trayRight.z);
         data.flick = Math.max(leftward, ((data.flick as number) ?? 0) * decay);
+      }
+      if (!data.tracked) {
+        data.startX = this.world3.x; // where this hold began, for the flick travel check
+        data.startZ = this.world3.z;
       }
       data.lastX = this.world3.x;
       data.lastZ = this.world3.z;
@@ -1113,7 +1305,7 @@ export class PlannerSystem extends createSystem({
     this.dayCheck -= delta;
     if (this.dayCheck <= 0) {
       this.dayCheck = DAY_CHECK_SECONDS;
-      if (this.state.day !== localDay()) this.applyRollover();
+      if (this.state.day !== planDay()) this.applyRollover();
     }
 
     this.tray.updateWorldMatrix(true, false);
@@ -1121,8 +1313,13 @@ export class PlannerSystem extends createSystem({
     this.trayRight.set(1, 0, 0).applyQuaternion(this.trayQuat);
     this.trackFlicks(delta);
     this.tickFocus(delta);
+    this.updateHover();
     this.sounds.updateListener(this.player.head);
     this.tickCoach(delta);
+    if (this.undoTimer > 0) {
+      this.undoTimer -= delta;
+      if (this.undoTimer <= 0) this.clearUndo();
+    }
     const k = 1 - Math.exp(-14 * delta);
     for (const entity of this.queries.resting.entities) {
       const object = entity.object3D;
@@ -1130,8 +1327,14 @@ export class PlannerSystem extends createSystem({
       const target = entity.getVectorView(TaskTile, 'target');
       this.world3.set(target[0], target[1], target[2]);
       this.tray.localToWorld(this.world3);
+      if (entity === this.hovered) this.world3.y += HOVER_LIFT;
       const snap = object.userData.needsSnap === true;
       if (snap) this.world3.y += (object.userData.spawnDrop as number) ?? 0;
+      if (snap && object.userData.spawnAt) {
+        // Split pieces start where the big tile cracked, then fly to their spots.
+        this.world3.copy(object.userData.spawnAt as Vector3);
+        object.userData.spawnAt = undefined;
+      }
       object.parent?.worldToLocal(this.world3);
 
       this.targetQuat.copy(this.trayQuat);
