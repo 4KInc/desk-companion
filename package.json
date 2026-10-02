@@ -12,7 +12,9 @@
     "reference:warmup": "iwsdk reference warmup",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=server-dist/main.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "start": "node server-dist/main.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
@@ -30,6 +32,7 @@
     "@meta-quest/metavr": "^1.3.2",
     "@types/node": "^26.6.3",
     "@types/three": "^0.181.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.5.0",
     "vite": "^7.1.4"
   },
