@@ -50,7 +50,7 @@ function allowed(client: string): boolean {
   return true;
 }
 
-async function readBody(req: IncomingMessage): Promise<Uint8Array | undefined> {
+async function readBody(req: IncomingMessage): Promise<Uint8Array<ArrayBuffer> | undefined> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -58,7 +58,14 @@ async function readBody(req: IncomingMessage): Promise<Uint8Array | undefined> {
     if (size > MAX_BODY_BYTES) return undefined;
     chunks.push(chunk as Buffer);
   }
-  return new Uint8Array(Buffer.concat(chunks));
+  // Copy into a fresh ArrayBuffer-backed array: a valid fetch body under strict DOM typings.
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return body;
 }
 
 function send(res: ServerResponse, status: number, body: string, type = 'application/json'): void {

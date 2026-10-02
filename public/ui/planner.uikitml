@@ -5,7 +5,7 @@
 <style>
   .panel-root {
     flex-direction: column;
-    width: 384px;
+    width: 460px;
     padding-top: 14px;
     padding-bottom: 16px;
     padding-left: 18px;
@@ -64,6 +64,8 @@
   .xr-button {
     flex-grow: 1;
     justify-content: center;
+    padding-left: 8px;
+    padding-right: 8px;
   }
 
   .nudge {
@@ -208,8 +210,8 @@
   <div id="status-text" class="status">Pinch a tile and drop it in a zone</div>
   <div id="jar-text" class="jar">Done jar: 0 tasks, 0h</div>
   <div class="row">
-    <Button id="winddown-button" class="xr-button"><ButtonLabel>Wind down</ButtonLabel></Button>
-    <Button id="move-tray-button" class="xr-button" style="display: none"><ButtonLabel>Move tray</ButtonLabel></Button>
+    <Button id="winddown-button" class="xr-button"><ButtonLabel id="winddown-label">Wind down</ButtonLabel></Button>
+    <Button id="move-tray-button" class="xr-button" style="display: none"><ButtonLabel id="movetray-label">Move tray</ButtonLabel></Button>
     <Button id="dictate-button" class="xr-button" style="display: none"><ButtonLabel id="dictate-label">Dictate</ButtonLabel></Button>
     <Button id="xr-button" class="xr-button"><ButtonLabel>Enter XR</ButtonLabel></Button>
     <Button id="exit-button" class="xr-button" style="display: none"><ButtonLabel>Exit XR</ButtonLabel></Button>

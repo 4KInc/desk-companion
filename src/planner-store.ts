@@ -115,6 +115,20 @@ export function endDay(state: PlannerState): number[] {
  */
 export function rollover(state: PlannerState, today = localDay()): boolean {
   if (state.day === today) return false;
+  // Keep a record of every day with finished work, ended or not, so the jar's weekly
+  // layers never lose a day. Work done after End day updates that day's record.
+  const last = state.history[state.history.length - 1];
+  if (last?.day === state.day) {
+    last.doneCount = Math.max(last.doneCount, state.today.doneCount);
+    last.doneMinutes = Math.max(last.doneMinutes, state.today.doneMinutes);
+  } else if (state.today.doneCount > 0) {
+    state.history.push({
+      day: state.day,
+      plannedMinutes: plannedMinutes(state),
+      doneMinutes: state.today.doneMinutes,
+      doneCount: state.today.doneCount,
+    });
+  }
   let order = 0;
   for (const task of state.tasks) if (task.zone === 'inbox') order = Math.max(order, task.order);
   state.tasks = state.tasks.filter((task) => task.zone !== 'drop');
@@ -174,4 +188,46 @@ export async function saveState(state: PlannerState): Promise<void> {
   } catch (error) {
     console.warn('[DeskCompanion] could not save state', error);
   }
+}
+
+/** Monday of the week containing `day` (YYYY-MM-DD, local). */
+export function weekStart(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const sinceMonday = (date.getDay() + 6) % 7;
+  return localDay(new Date(y, m - 1, d - sinceMonday));
+}
+
+export interface JarLayer {
+  /** Week start (YYYY-MM-DD), or 'earlier' for merged older weeks. */
+  week: string;
+  count: number;
+  current: boolean;
+}
+
+/**
+ * The done jar as weekly strata, oldest first and the current week last (on top).
+ * Weeks beyond `maxPastWeeks`, and anything finished before history existed, are
+ * merged into one 'earlier' layer at the bottom. Counts always add up to jar.count.
+ */
+export function jarLayers(state: PlannerState, maxPastWeeks = 6): JarLayer[] {
+  const byWeek = new Map<string, number>();
+  const add = (week: string, n: number) => byWeek.set(week, (byWeek.get(week) ?? 0) + n);
+  for (const record of state.history) if (record.doneCount > 0) add(weekStart(record.day), record.doneCount);
+  const last = state.history[state.history.length - 1];
+  const todayExtra = last?.day === state.day ? state.today.doneCount - last.doneCount : state.today.doneCount;
+  const current = weekStart(state.day);
+  add(current, Math.max(0, todayExtra));
+
+  let tracked = 0;
+  for (const n of byWeek.values()) tracked += n;
+  let earlier = Math.max(0, state.jar.count - tracked);
+  const past = [...byWeek.keys()].filter((week) => week !== current).sort();
+  while (past.length > maxPastWeeks) earlier += byWeek.get(past.shift()!) ?? 0;
+
+  const layers: JarLayer[] = [];
+  if (earlier > 0) layers.push({ week: 'earlier', count: earlier, current: false });
+  for (const week of past) layers.push({ week, count: byWeek.get(week)!, current: false });
+  layers.push({ week: current, count: byWeek.get(current) ?? 0, current: true });
+  return layers.filter((layer) => layer.count > 0);
 }

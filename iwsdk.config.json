@@ -16,7 +16,7 @@
         "handTracking": true,
         "anchors": true,
         "planeDetection": true,
-        "meshDetection": true,
+        "meshDetection": false,
         "hitTest": true
       }
     },

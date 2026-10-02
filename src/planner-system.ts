@@ -2,10 +2,12 @@ import {
   BoxGeometry,
   CanvasTexture,
   createSystem,
+  CylinderGeometry,
   DoubleSide,
   Grabbed,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   Object3D,
   OneHandGrabbable,
   PlaneGeometry,
@@ -27,6 +29,7 @@ import { DeskPlacement, PlacementState, TaskTile, Zone } from './planner-compone
 import {
   emptyState,
   endDay,
+  jarLayers,
   loadState,
   localDay,
   plannedMinutes,
@@ -81,6 +84,12 @@ const MIN_TRACKED_SHARE = 0.25;
 const MIN_TRACKED_MINUTES = 2;
 const TOOK_FACTORS = { less: 0.7, same: 1, more: 1.5 } as const;
 const MAX_COMPLETIONS = 300;
+/** Done-jar strata: one layer per past week (oldest at the bottom), the current week glowing on top. */
+const STRATA_POOL = 8;
+const STRATA_COLORS = [0x7cc6f2, 0x8c7ae6, 0x39b8a8, 0xef7a5a, 0x5f8fd1, 0xc59bd6];
+const EARLIER_COLOR = 0x9aa3ad;
+const CURRENT_COLOR = 0xf5b945;
+const MIN_LAYER_HEIGHT = 0.0025;
 /** How long the coach dwells on the capacity line, and on "You're set". */
 const COACH_LINE_SECONDS = 6;
 const COACH_COMPLETE_SECONDS = 5;
@@ -127,6 +136,7 @@ export class PlannerSystem extends createSystem({
   private dismissedNudge = '';
   private splitting = false;
   private coach?: CoachVisuals;
+  private readonly strata: Mesh[] = [];
   private coachCard?: UIKit.Container;
   private coachText?: TextElement;
   private coachNow: CoachStep = 'off';
@@ -192,6 +202,7 @@ export class PlannerSystem extends createSystem({
     this.jarFill = fill;
     this.buildTrayDecorations();
     this.coach = new CoachVisuals(tray, jar);
+    this.buildJarStrata();
     this.bindPanel(panel);
     this.bound = true;
     if (this.loaded) this.spawnSavedTiles();
@@ -226,6 +237,20 @@ export class PlannerSystem extends createSystem({
     const inbox = this.makeFlatLabel('INBOX', 0x5b616b, 0.1, 0.018);
     inbox.position.set(-TRAY.width / 2 + 0.075, TRAY.surfaceY + 0.0006, TRAY.inbox.z + TRAY.inbox.depth / 2 + 0.011);
     this.tray.add(inbox);
+  }
+
+  private buildJarStrata(): void {
+    // Shared unit-height cylinder anchored at its base; each layer scales it in y.
+    const geometry = new CylinderGeometry(JAR.fillRadius, JAR.fillRadius, 1, 20);
+    geometry.translate(0, 0.5, 0);
+    for (let i = 0; i < STRATA_POOL; i++) {
+      const layer = new Mesh(geometry, new MeshStandardMaterial({ roughness: 0.55, emissiveIntensity: 0.35 }));
+      layer.name = `jar-layer-${i}`;
+      layer.visible = false;
+      this.jar.add(layer);
+      this.strata.push(layer);
+    }
+    this.jarFill.visible = false; // the single fill is replaced by weekly layers
   }
 
   private makeFlatLabel(text: string, color: number, width: number, height: number): Mesh {
@@ -989,9 +1014,29 @@ export class PlannerSystem extends createSystem({
 
   private refreshJar(): void {
     const { count, minutes } = this.state.jar;
-    // Fills quickly at first, then ever more slowly, so it never visibly tops out.
-    this.jarFill.scale.y = Math.max(0.002, JAR.maxFill * (1 - Math.exp(-count / 40)));
-    this.jarFill.visible = count > 0;
+    // Fills quickly at first, then ever more slowly, split into one layer per week.
+    const layers = jarLayers(this.state, STRATA_POOL - 2);
+    const total = layers.reduce((sum, layer) => sum + layer.count, 0);
+    const height = total > 0 ? JAR.maxFill * (1 - Math.exp(-total / 40)) : 0;
+    let y = JAR.floor;
+    this.strata.forEach((mesh, i) => {
+      const layer = layers[i];
+      mesh.visible = layer !== undefined;
+      if (!layer) return;
+      const h = Math.max(MIN_LAYER_HEIGHT, (height * layer.count) / total);
+      const color = layer.current
+        ? CURRENT_COLOR
+        : layer.week === 'earlier'
+          ? EARLIER_COLOR
+          : STRATA_COLORS[i % STRATA_COLORS.length];
+      const material = mesh.material as MeshStandardMaterial;
+      material.color.setHex(color);
+      material.emissive.setHex(color);
+      material.emissiveIntensity = layer.current ? 0.55 : 0.25;
+      mesh.position.y = y;
+      mesh.scale.y = h;
+      y += h;
+    });
     const tomorrow = this.state.tasks.filter((task) => task.zone === Zone.Tomorrow).length;
     // A streak is alive if the last ended day is today or yesterday.
     const alive = this.state.lastEndedDay === this.state.day || this.state.lastEndedDay === previousDay(this.state.day);

@@ -77,6 +77,23 @@ function drawLabel(title: string, minutes: number, color: number, priority: numb
   return texture;
 }
 
+/**
+ * A tile box with two draw groups instead of BoxGeometry's six: the five plain
+ * faces share material 0 and the labelled top face (+y) uses material 1. With a
+ * dozen tiles on the desk this saves ~50 draw calls per eye.
+ */
+function tileGeometry(thickness: number): BoxGeometry {
+  const geometry = new BoxGeometry(TILE_WIDTH, thickness, TILE_DEPTH);
+  // BoxGeometry face order is +x, -x, +y, -y, +z, -z, six indices each; move +y last.
+  const index = Array.from(geometry.index!.array);
+  const top = index.slice(12, 18);
+  geometry.setIndex([...index.slice(0, 12), ...index.slice(18), ...top]);
+  geometry.clearGroups();
+  geometry.addGroup(0, 30, 0);
+  geometry.addGroup(30, 6, 1);
+  return geometry;
+}
+
 /** Builds one tile mesh. Materials are per-tile so overflow tinting stays local. */
 export function createTileMesh(title: string, minutes: number, priority = 2): Mesh {
   const color = sideColor(minutes);
@@ -89,16 +106,14 @@ export function createTileMesh(title: string, minutes: number, priority = 2): Me
     emissiveIntensity: 0.35,
     roughness: 0.7,
   });
-  // BoxGeometry groups: +x, -x, +y (top), -y, +z, -z.
-  const geometry = new BoxGeometry(TILE_WIDTH, tileThickness(minutes), TILE_DEPTH);
-  const mesh = new Mesh(geometry, [side, side, top, side, side, side]);
+  const mesh = new Mesh(tileGeometry(tileThickness(minutes)), [side, top]);
   mesh.name = `tile-${title}`;
   mesh.userData.baseColor = color;
   return mesh;
 }
 
 export function setTileOverflow(mesh: Mesh, overflow: boolean): void {
-  const [side, , top] = mesh.material as MeshStandardMaterial[];
+  const [side, top] = mesh.material as MeshStandardMaterial[];
   if (overflow) {
     side.emissive.copy(OVERFLOW);
     side.emissiveIntensity = 0.9;
