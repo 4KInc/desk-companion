@@ -43,6 +43,13 @@ export class DeskSounds {
       } catch {
         return undefined;
       }
+      // If the audio device fails (unplugged headphones, a Bluetooth switch), drop the
+      // context so the next interaction builds a fresh one instead of staying silent.
+      const failed = this.ctx;
+      failed.addEventListener('error', () => {
+        if (this.ctx === failed) this.ctx = undefined;
+        void failed.close().catch(() => undefined);
+      });
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.55;
       this.master.connect(this.ctx.destination);
