@@ -10,8 +10,10 @@ import { handleBrainDumpRequest } from './brain-dump.js';
 const PORT = Number(process.env.PORT ?? 8080);
 const ROOT = resolve(process.env.STATIC_DIR ?? 'dist');
 const MAX_BODY_BYTES = 16 * 1024;
-/** The API spends the owner's Anthropic credits: cap requests per client address. */
+/** The API spends the owner's Anthropic credits: cap requests per client address... */
 const RATE_LIMIT = { max: 20, windowMs: 10 * 60 * 1000 };
+/** ...and in total per instance per day (Cloud Run runs at most 2 instances). */
+const DAILY_CAP = Number(process.env.BRAIN_DUMP_DAILY_CAP ?? 300);
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -36,6 +38,43 @@ const MIME: Record<string, string> = {
 };
 
 const hits = new Map<string, number[]>();
+let dailyCount = 0;
+let dailyResetAt = Date.now() + 24 * 60 * 60 * 1000;
+
+function underDailyCap(): boolean {
+  if (Date.now() > dailyResetAt) {
+    dailyCount = 0;
+    dailyResetAt = Date.now() + 24 * 60 * 60 * 1000;
+  }
+  if (dailyCount >= DAILY_CAP) return false;
+  dailyCount++;
+  return true;
+}
+
+/**
+ * The real client address. Cloud Run's front end appends the connecting IP as the
+ * LAST X-Forwarded-For entry; anything before it was supplied by the client and
+ * can be forged, so it must never key the rate limiter.
+ */
+function clientAddress(req: IncomingMessage): string {
+  const forwarded = String(req.headers['x-forwarded-for'] ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return forwarded[forwarded.length - 1] ?? req.socket.remoteAddress ?? 'unknown';
+}
+
+/** Only the app's own page may call the API from a browser (blocks hot-linking from other sites). */
+function sameOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
 
 function allowed(client: string): boolean {
   const now = Date.now();
@@ -74,9 +113,16 @@ function send(res: ServerResponse, status: number, body: string, type = 'applica
 }
 
 async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const client = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? 'unknown').split(',')[0].trim();
-  if (req.method === 'POST' && !allowed(client)) {
+  if (req.method === 'POST' && !sameOrigin(req)) {
+    send(res, 403, JSON.stringify({ error: 'Forbidden' }));
+    return;
+  }
+  if (req.method === 'POST' && !allowed(clientAddress(req))) {
     send(res, 429, JSON.stringify({ error: 'Too many brain dumps, try again in a few minutes' }));
+    return;
+  }
+  if (req.method === 'POST' && !underDailyCap()) {
+    send(res, 429, JSON.stringify({ error: 'The agent is resting for today. Add tasks by hand' }));
     return;
   }
   const body = req.method === 'POST' ? await readBody(req) : undefined;

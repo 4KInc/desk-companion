@@ -89,7 +89,8 @@ export async function handleBrainDumpRequest(request: Request): Promise<Response
     } else if (error instanceof Anthropic.APIError) {
       return Response.json({ error: `Agent error ${error.status ?? ''}`.trim() }, { status: 502 });
     }
-    console.error('[brain-dump]', error);
+    // Never log the error object itself: parse failures can carry the user's task text.
+    console.error('[brain-dump] failed:', error instanceof Error ? error.name : typeof error);
     return Response.json({ error: 'Agent unavailable' }, { status: 503 });
   }
 }
