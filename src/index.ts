@@ -15,4 +15,10 @@ World.create(
   world.visibilityState.subscribe((visibility) => {
     overlay.hidden = visibility !== VisibilityState.NonImmersive;
   });
+  if (import.meta.env.DEV) {
+    // Alt+Shift+R: start over as a brand-new user (first-run testing, demo recording).
+    window.addEventListener('keydown', (event) => {
+      if (event.altKey && event.shiftKey && event.code === 'KeyR') void planner?.resetForDemo();
+    });
+  }
 });

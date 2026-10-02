@@ -40,6 +40,8 @@ export interface PlannerState {
   completions: Completion[];
   /** Task currently floating in focus mode, or 0. */
   focusTaskId: number;
+  /** First-run coach progress. Users who already had data skip it. */
+  onboarding: { lineSeen: boolean; done: boolean };
 }
 
 const DB_NAME = 'desk-companion';
@@ -59,6 +61,7 @@ export function emptyState(day = localDay()): PlannerState {
     lastEndedDay: '',
     completions: [],
     focusTaskId: 0,
+    onboarding: { lineSeen: false, done: false },
   };
 }
 
@@ -143,7 +146,15 @@ export async function loadState(): Promise<PlannerState> {
       request.onerror = () => reject(request.error);
     });
     db.close();
-    return value ? { ...emptyState(), ...(value as PlannerState) } : emptyState();
+    if (!value) return emptyState();
+    const saved = value as Partial<PlannerState>;
+    const merged = { ...emptyState(), ...saved } as PlannerState;
+    // Saved before the coach existed: anyone with tasks or a filled jar already knows the loop.
+    if (!saved.onboarding) {
+      const experienced = (saved.tasks?.length ?? 0) > 0 || (saved.jar?.count ?? 0) > 0;
+      merged.onboarding = { lineSeen: experienced, done: experienced };
+    }
+    return merged;
   } catch (error) {
     console.warn('[DeskCompanion] could not load saved state', error);
     return emptyState();

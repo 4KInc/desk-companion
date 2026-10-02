@@ -18,6 +18,8 @@ import {
   type Entity,
 } from '@iwsdk/core';
 import { splitBrainDump, type DraftTask } from './brain-dump.js';
+import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
+import { CoachVisuals } from './coach.js';
 import { adjustEstimate, biasByCategory, biasLine, type Category } from './estimates.js';
 import { DeskSounds } from './sound.js';
 import { speechRecognitionConstructor, type SpeechRecognitionLike } from './speech.js';
@@ -79,6 +81,9 @@ const MIN_TRACKED_SHARE = 0.25;
 const MIN_TRACKED_MINUTES = 2;
 const TOOK_FACTORS = { less: 0.7, same: 1, more: 1.5 } as const;
 const MAX_COMPLETIONS = 300;
+/** How long the coach dwells on the capacity line, and on "You're set". */
+const COACH_LINE_SECONDS = 6;
+const COACH_COMPLETE_SECONDS = 5;
 const STACK_ZONES = [Zone.Now, Zone.Later, Zone.Drop] as const;
 const ZONE_CENTRE: Record<(typeof STACK_ZONES)[number], { x: number; z: number }> = {
   [Zone.Now]: TRAY.zones.Now,
@@ -121,6 +126,14 @@ export class PlannerSystem extends createSystem({
   private nudgeKey = '';
   private dismissedNudge = '';
   private splitting = false;
+  private coach?: CoachVisuals;
+  private coachCard?: UIKit.Container;
+  private coachText?: TextElement;
+  private coachNow: CoachStep = 'off';
+  private coachTimer = 0;
+  private canDictate = false;
+  private capacityTop = 0;
+  private resetting = false;
   private recapCard?: UIKit.Container;
   private recapText?: TextElement;
   private dayCheck = DAY_CHECK_SECONDS;
@@ -178,6 +191,7 @@ export class PlannerSystem extends createSystem({
     this.jar = jar;
     this.jarFill = fill;
     this.buildTrayDecorations();
+    this.coach = new CoachVisuals(tray, jar);
     this.bindPanel(panel);
     this.bound = true;
     if (this.loaded) this.spawnSavedTiles();
@@ -237,6 +251,8 @@ export class PlannerSystem extends createSystem({
 
   private bindPanel(panel: UIKitMLAsset): void {
     this.capacityText = panel.getElementById('capacity-text') as TextElement;
+    this.coachCard = panel.getElementById('coach-card') as UIKit.Container | undefined;
+    this.coachText = panel.getElementById('coach-text') as TextElement | undefined;
     this.statusText = panel.getElementById('status-text') as TextElement;
     this.jarText = panel.getElementById('jar-text') as TextElement;
     const on = (id: string, handler: () => void) => {
@@ -293,6 +309,7 @@ export class PlannerSystem extends createSystem({
         xrButton.setProperties({ display: is2D ? 'flex' : 'none' });
         exitButton.setProperties({ display: is2D ? 'none' : 'flex' });
         moveTray?.setProperties({ display: is2D ? 'none' : 'flex' });
+        this.refreshCoach(); // hints differ between the browser page and the headset
       }),
     );
   }
@@ -303,6 +320,7 @@ export class PlannerSystem extends createSystem({
     const button = panel.getElementById('dictate-button');
     const label = panel.getElementById('dictate-label') as TextElement | undefined;
     if (!Recognition || !button) return; // no speech support: the button stays hidden
+    this.canDictate = true;
     button.setProperties({ display: 'flex' });
     let recognition: SpeechRecognitionLike | undefined;
     let transcript = '';
@@ -346,6 +364,61 @@ export class PlannerSystem extends createSystem({
     if (!desk) return;
     desk.setValue(DeskPlacement, 'manual', true);
     desk.setValue(DeskPlacement, 'state', PlacementState.Placing);
+  }
+
+  // --- first-run coach ----------------------------------------------------
+
+  /** Shows the hint and spatial cue for the user's current first-run step. */
+  private refreshCoach(): void {
+    if (!this.coach) return;
+    let step = coachStep(this.state);
+    if (step === 'complete' && this.coachNow !== 'complete') {
+      // First task in the jar: the loop is learned. Celebrate briefly, then get out of the way.
+      this.state.onboarding.done = true;
+      this.coachTimer = COACH_COMPLETE_SECONDS;
+      this.sounds.play('endDay');
+      this.scheduleSave();
+    }
+    if (step === 'off' && this.coachNow === 'complete' && this.coachTimer > 0) step = 'complete';
+    if (step === 'line' && this.coachNow !== 'line') this.coachTimer = COACH_LINE_SECONDS;
+    this.coachNow = step;
+
+    let ghostFrom: { x: number; y: number; z: number } | undefined;
+    if (step === 'sort') {
+      for (const entity of this.tilesById.values()) {
+        if (entity.getValue(TaskTile, 'zone') !== Zone.Inbox || !entity.hasComponent(OneHandGrabbable)) continue;
+        const target = entity.getVectorView(TaskTile, 'target');
+        ghostFrom = { x: target[0], y: target[1], z: target[2] };
+        break;
+      }
+    }
+    this.coach.show(step, this.capacityTop, ghostFrom);
+    const inBrowser = this.world.visibilityState.peek() === VisibilityState.NonImmersive;
+    const hint =
+      step === 'add' && inBrowser
+        ? 'Type what is on your mind in the box below, or click a time to add a task'
+        : coachHint(step, this.state.capacityHours, this.canDictate);
+    this.coachCard?.setProperties({ display: step === 'off' ? 'none' : 'flex' });
+    if (hint) this.setText(this.coachText, hint);
+  }
+
+  private tickCoach(delta: number): void {
+    this.coach?.update(delta);
+    if (this.coachTimer <= 0) return;
+    this.coachTimer -= delta;
+    if (this.coachTimer > 0) return;
+    if (this.coachNow === 'line') {
+      this.state.onboarding.lineSeen = true;
+      this.scheduleSave();
+    }
+    this.refreshCoach();
+  }
+
+  /** Dev-only: wipe saved state and reload, for testing the first run or recording a demo. */
+  async resetForDemo(): Promise<void> {
+    this.resetting = true;
+    await saveState(emptyState());
+    location.reload();
   }
 
   // --- tasks -------------------------------------------------------------
@@ -804,6 +877,8 @@ export class PlannerSystem extends createSystem({
     }
     this.wasOverflowing = anyOverflow;
     this.capacityLine.position.y = capacityTop;
+    this.capacityTop = capacityTop;
+    this.refreshCoach();
     this.capacityMaterial.color.setHex(anyOverflow ? 0xff5a4f : 0x5fe0d0);
     this.capacityMaterial.opacity = anyOverflow ? 0.5 : 0.35;
     const over = nowMinutes - this.state.capacityHours * 60;
@@ -916,6 +991,7 @@ export class PlannerSystem extends createSystem({
     const { count, minutes } = this.state.jar;
     // Fills quickly at first, then ever more slowly, so it never visibly tops out.
     this.jarFill.scale.y = Math.max(0.002, JAR.maxFill * (1 - Math.exp(-count / 40)));
+    this.jarFill.visible = count > 0;
     const tomorrow = this.state.tasks.filter((task) => task.zone === Zone.Tomorrow).length;
     // A streak is alive if the last ended day is today or yesterday.
     const alive = this.state.lastEndedDay === this.state.day || this.state.lastEndedDay === previousDay(this.state.day);
@@ -986,7 +1062,7 @@ export class PlannerSystem extends createSystem({
     if (!this.bound && !this.tryBind()) return;
     if (this.saveCountdown > 0) {
       this.saveCountdown -= delta;
-      if (this.saveCountdown <= 0) void saveState(this.state);
+      if (this.saveCountdown <= 0 && !this.resetting) void saveState(this.state);
     }
     this.syncPlacementStatus();
     this.dayCheck -= delta;
@@ -1001,6 +1077,7 @@ export class PlannerSystem extends createSystem({
     this.trackFlicks(delta);
     this.tickFocus(delta);
     this.sounds.updateListener(this.player.head);
+    this.tickCoach(delta);
     const k = 1 - Math.exp(-14 * delta);
     for (const entity of this.queries.resting.entities) {
       const object = entity.object3D;
