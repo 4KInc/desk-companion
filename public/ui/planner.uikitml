@@ -241,6 +241,12 @@
       <Button id="recap-cancel" class="nudge-button"><ButtonLabel>Not yet</ButtonLabel></Button>
     </div>
   </div>
+  <div id="tile-actions" class="row" style="display: none">
+    <div id="tile-actions-text" class="label" style="flex-grow: 1; flex-shrink: 1">This tile:</div>
+    <Button id="action-focus" class="undo-button"><ButtonLabel>Focus</ButtonLabel></Button>
+    <Button id="action-tomorrow" class="undo-button"><ButtonLabel>Tomorrow</ButtonLabel></Button>
+    <Button id="action-split" class="undo-button" style="display: none"><ButtonLabel>Split</ButtonLabel></Button>
+  </div>
   <div id="status-row" class="row">
     <div id="status-text" class="status" style="flex-grow: 1; flex-shrink: 1">Pinch a tile and drop it in a zone</div>
     <Button id="undo-button" class="undo-button" style="display: none"><ButtonLabel>Undo</ButtonLabel></Button>

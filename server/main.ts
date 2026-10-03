@@ -38,6 +38,15 @@ const MIME: Record<string, string> = {
 };
 
 const hits = new Map<string, number[]>();
+const diagHits = new Map<string, number[]>();
+/** Diagnostics have their own budget so a playtest never eats into brain dumps. */
+const DIAG_LIMIT = { max: 90, windowMs: 10 * 60 * 1000 };
+/** The only fields a diagnostics sample may carry, with their types. */
+const DIAG_FIELDS: Record<string, 'string' | 'number' | 'boolean'> = {
+  session: 'string', sample: 'number', ua: 'string', immersive: 'boolean', fps: 'number',
+  worstFrameMs: 'number', tiles: 'number', planes: 'number', placement: 'string',
+  placementSource: 'string', hands: 'number', depth: 'boolean', speech: 'boolean',
+};
 let dailyCount = 0;
 let dailyResetAt = Date.now() + 24 * 60 * 60 * 1000;
 
@@ -76,17 +85,45 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
-function allowed(client: string): boolean {
+function allowed(client: string, store = hits, limit = RATE_LIMIT): boolean {
   const now = Date.now();
-  const recent = (hits.get(client) ?? []).filter((t) => now - t < RATE_LIMIT.windowMs);
-  if (recent.length >= RATE_LIMIT.max) {
-    hits.set(client, recent);
+  const recent = (store.get(client) ?? []).filter((t) => now - t < limit.windowMs);
+  if (recent.length >= limit.max) {
+    store.set(client, recent);
     return false;
   }
   recent.push(now);
-  hits.set(client, recent);
-  if (hits.size > 5000) hits.clear(); // bound memory on a long-lived instance
+  store.set(client, recent);
+  if (store.size > 5000) store.clear(); // bound memory on a long-lived instance
   return true;
+}
+
+/** Opt-in playtest samples: whitelisted fields only, logged as one structured line. */
+async function diagnostics(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== 'POST' || !sameOrigin(req)) {
+    send(res, 403, JSON.stringify({ error: 'Forbidden' }));
+    return;
+  }
+  if (!allowed(clientAddress(req), diagHits, DIAG_LIMIT)) {
+    send(res, 429, JSON.stringify({ error: 'Too many samples' }));
+    return;
+  }
+  const body = await readBody(req);
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = body ? (JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>) : {};
+  } catch {
+    send(res, 400, JSON.stringify({ error: 'Expected JSON' }));
+    return;
+  }
+  const sample: Record<string, unknown> = {};
+  for (const [key, type] of Object.entries(DIAG_FIELDS)) {
+    const value = raw[key];
+    if (typeof value !== type) continue;
+    sample[key] = typeof value === 'string' ? value.slice(0, 160) : value;
+  }
+  console.log(JSON.stringify({ type: 'desk-companion-playtest', ...sample }));
+  send(res, 204, '');
 }
 
 async function readBody(req: IncomingMessage): Promise<Uint8Array<ArrayBuffer> | undefined> {
@@ -171,7 +208,12 @@ async function staticFile(req: IncomingMessage, res: ServerResponse, pathname: s
 createServer((req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   const isApi = pathname === '/api/brain-dump' || pathname === '/api/split-task';
-  const handled = isApi ? api(req, res, pathname) : staticFile(req, res, pathname);
+  const handled =
+    pathname === '/api/diagnostics'
+      ? diagnostics(req, res)
+      : isApi
+        ? api(req, res, pathname)
+        : staticFile(req, res, pathname);
   handled.catch((error) => {
     console.error('[server]', error);
     if (!res.headersSent) send(res, 500, JSON.stringify({ error: 'Server error' }));

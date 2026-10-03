@@ -3,6 +3,7 @@ import {
   CanvasTexture,
   createSystem,
   CylinderGeometry,
+  DepthOccludable,
   DoubleSide,
   Grabbed,
   Mesh,
@@ -78,6 +79,8 @@ const HOVER_RADIUS = 0.1;
 const HOVER_LIFT = 0.015;
 /** Tiles this long landing in Now get the agent's offer to split them into steps. */
 const SPLIT_MIN_MINUTES = 120;
+/** After a tile is set down, the panel offers Focus / Tomorrow / Split buttons for it this long. */
+const TILE_ACTIONS_SECONDS = 10;
 const DAY_CHECK_SECONDS = 30;
 /** Releasing a tile this close to your head (horizontally) and below it counts as pulling it to your chest. */
 const CHEST_RADIUS = 0.32;
@@ -167,6 +170,11 @@ export class PlannerSystem extends createSystem({
   private splitText?: TextElement;
   private splitOffer?: StoredTask;
   private splitBusy = false;
+  private tileActions?: UIKit.Container;
+  private tileActionsText?: TextElement;
+  private actionSplit?: UIKit.Component;
+  private touched?: StoredTask;
+  private touchedTimer = 0;
   private hovered?: Entity;
   private readonly hoverPos = new Vector3();
   private readonly gripLeft = new Vector3();
@@ -201,6 +209,7 @@ export class PlannerSystem extends createSystem({
     this.cleanupFuncs.push(
       () => this.sounds.dispose(),
       this.queries.held.subscribe('qualify', (entity) => {
+        this.setOccludable(entity, true);
         const data = entity.object3D?.userData;
         if (data) {
           data.flick = 0;
@@ -208,7 +217,13 @@ export class PlannerSystem extends createSystem({
         }
         this.setStatus('Drop it on Now, Later or Drop, the jar when done, or flick it left for tomorrow');
       }),
-      this.queries.held.subscribe('disqualify', (entity) => this.onRelease(entity)),
+      this.queries.held.subscribe('disqualify', (entity) => {
+        if (entity.object3D) this.onRelease(entity);
+        // A tile kept in focus stays occludable; anything resting on the desk does not.
+        if (entity.object3D && entity.getValue(TaskTile, 'taskId') !== this.state.focusTaskId) {
+          this.setOccludable(entity, false);
+        }
+      }),
     );
     void loadState().then((saved) => {
       this.state = saved;
@@ -340,6 +355,12 @@ export class PlannerSystem extends createSystem({
     this.splitCard = panel.getElementById('split-card') as UIKit.Container | undefined;
     this.splitText = panel.getElementById('split-text') as TextElement | undefined;
     on('split-accept', () => void this.acceptSplit());
+    this.tileActions = panel.getElementById('tile-actions') as UIKit.Container | undefined;
+    this.tileActionsText = panel.getElementById('tile-actions-text') as TextElement | undefined;
+    this.actionSplit = panel.getElementById('action-split') as UIKit.Component | undefined;
+    on('action-focus', () => this.tileAction('focus'));
+    on('action-tomorrow', () => this.tileAction('tomorrow'));
+    on('action-split', () => this.tileAction('split'));
     on('split-dismiss', () => this.dismissSplit());
     on('undo-button', () => this.performUndo());
     on('took-less', () => this.answerTook('less'));
@@ -690,6 +711,7 @@ export class PlannerSystem extends createSystem({
     }
     if (zone) this.sounds.play('snap', this.world3);
     else if (!wasFocused) this.sounds.play('miss', this.world3);
+    if (task.zone !== Zone.Drop) this.showTileActions(task);
     this.relayout();
     this.scheduleSave();
   }
@@ -861,6 +883,7 @@ export class PlannerSystem extends createSystem({
     this.focusTask = focusId ? this.state.tasks.find((task) => task.id === focusId) : undefined;
     for (const [id, entity] of this.tilesById) {
       entity.setValue(TaskTile, 'focused', id === focusId);
+      if (!entity.hasComponent(Grabbed)) this.setOccludable(entity, id === focusId);
       setTileDim(entity.object3D as Mesh, focusId !== 0 && id !== focusId);
     }
     const object = focusId ? this.tilesById.get(focusId)?.object3D : undefined;
@@ -905,6 +928,52 @@ export class PlannerSystem extends createSystem({
     this.refreshJar();
     this.setStatus(`Pushed "${task.title}" to tomorrow`);
     this.scheduleSave();
+  }
+
+  /**
+   * Real hands hide a tile only while it is in the air (held or focused). Tiles resting
+   * on the desk sit within depth-sensor noise of the real surface and would flicker.
+   */
+  private setOccludable(entity: Entity, on: boolean): void {
+    const has = entity.hasComponent(DepthOccludable);
+    if (on && !has) entity.addComponent(DepthOccludable, { mode: 'HardOcclusion' });
+    else if (!on && has) entity.removeComponent(DepthOccludable);
+  }
+
+  // --- tile actions (gesture fallbacks) --------------------------------------
+
+  /** Buttons for the tile just set down, so flick and chest-pull are shortcuts, not requirements. */
+  private showTileActions(task: StoredTask): void {
+    this.touched = task;
+    this.touchedTimer = TILE_ACTIONS_SECONDS;
+    const title = task.title.length > 22 ? `${task.title.slice(0, 21)}.` : task.title;
+    this.setText(this.tileActionsText, `"${title}":`);
+    this.actionSplit?.setProperties({
+      display: task.minutes >= SPLIT_MIN_MINUTES && !task.splitDeclined ? 'flex' : 'none',
+    });
+    this.tileActions?.setProperties({ display: 'flex' });
+  }
+
+  private hideTileActions(): void {
+    this.touched = undefined;
+    this.touchedTimer = 0;
+    this.tileActions?.setProperties({ display: 'none' });
+  }
+
+  private tileAction(action: 'focus' | 'tomorrow' | 'split'): void {
+    const task = this.touched;
+    this.hideTileActions();
+    const entity = task ? this.tilesById.get(task.id) : undefined;
+    if (!task || !entity || !this.state.tasks.includes(task) || entity.hasComponent(Grabbed)) return;
+    if (action === 'focus') {
+      this.sounds.play('focusStart');
+      this.startFocus(task);
+    } else if (action === 'tomorrow') {
+      this.deferTask(entity, task);
+    } else {
+      this.splitOffer = task;
+      void this.acceptSplit();
+    }
   }
 
   // --- undo -----------------------------------------------------------------
@@ -1316,6 +1385,10 @@ export class PlannerSystem extends createSystem({
     this.updateHover();
     this.sounds.updateListener(this.player.head);
     this.tickCoach(delta);
+    if (this.touchedTimer > 0) {
+      this.touchedTimer -= delta;
+      if (this.touchedTimer <= 0) this.hideTileActions();
+    }
     if (this.undoTimer > 0) {
       this.undoTimer -= delta;
       if (this.undoTimer <= 0) this.clearUndo();
