@@ -170,6 +170,7 @@ export class PlannerSystem extends createSystem({
   private splitText?: TextElement;
   private splitOffer?: StoredTask;
   private splitBusy = false;
+  private nudgeVisible = false;
   private tileActions?: UIKit.Container;
   private tileActionsText?: TextElement;
   private actionSplit?: UIKit.Component;
@@ -778,12 +779,15 @@ export class PlannerSystem extends createSystem({
     this.scheduleSave();
   }
 
-  /** At most one card at a time keeps the panel short: recap, then took, then nudge. */
+  /** At most one card at a time keeps the panel short: recap, then how-long, then nudge, then split. */
   private refreshCards(): void {
     this.tookCard?.setProperties({ display: this.pendingTook && !this.recapOpen ? 'flex' : 'none' });
-    this.splitCard?.setProperties({
-      display: this.splitOffer && !this.recapOpen && !this.pendingTook ? 'flex' : 'none',
-    });
+    this.refreshSplitCard();
+  }
+
+  private refreshSplitCard(): void {
+    const show = this.splitOffer && !this.recapOpen && !this.pendingTook && !this.nudgeVisible;
+    this.splitCard?.setProperties({ display: show ? 'flex' : 'none' });
   }
 
   // --- split a big task (agent) --------------------------------------------
@@ -1168,8 +1172,10 @@ export class PlannerSystem extends createSystem({
     }
     this.nudgeKey = `${picks.map((task) => task.id).sort((a, b) => a - b).join(',')}@${this.state.capacityHours}`;
     // Wind-down is for clearing the day, not replanning it: no nudge while the recap is open.
-    const show =
-      picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook && !this.splitOffer;
+    // Overflow is the core moment, so the nudge outranks a pending split offer (which waits).
+    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook;
+    this.nudgeVisible = show;
+    this.refreshSplitCard();
     this.nudgeTaskIds = show ? picks.map((task) => task.id) : [];
     this.nudgeCard?.setProperties({ display: show ? 'flex' : 'none' });
     if (!show) return;
