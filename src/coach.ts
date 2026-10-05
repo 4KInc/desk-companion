@@ -26,6 +26,8 @@ export class CoachVisuals {
   private readonly from = new Vector3();
   private readonly to = new Vector3();
   private step: CoachStep = 'off';
+  /** Reduce motion: no flying ghost tile and a steady (non-pulsing) ring. */
+  private reduceMotion = false;
   private clock = 0;
 
   private readonly tray: Object3D;
@@ -51,11 +53,15 @@ export class CoachVisuals {
     this.ring.visible = false;
   }
 
+  setReduceMotion(on: boolean): void {
+    this.reduceMotion = on;
+  }
+
   /** `ghostFrom` is the tray-local position of the tile to demonstrate with (sort step). */
   show(step: CoachStep, capacityY: number, ghostFrom?: { x: number; y: number; z: number }): void {
     if (step !== this.step) this.clock = 0;
     this.step = step;
-    this.ghost.visible = step === 'sort' && ghostFrom !== undefined;
+    this.ghost.visible = step === 'sort' && ghostFrom !== undefined && !this.reduceMotion;
     this.ring.visible = step === 'sort' || step === 'line' || step === 'jar';
     if (this.ghost.visible && ghostFrom) {
       this.from.set(ghostFrom.x, ghostFrom.y, ghostFrom.z);
@@ -78,7 +84,7 @@ export class CoachVisuals {
     if (!this.ghost.visible && !this.ring.visible) return;
     this.clock += delta;
     if (this.ring.visible) {
-      const pulse = 0.5 + 0.5 * Math.sin(this.clock * 4);
+      const pulse = this.reduceMotion ? 0.6 : 0.5 + 0.5 * Math.sin(this.clock * 4);
       this.ringMaterial.opacity = 0.35 + 0.5 * pulse;
       const base = this.step === 'jar' ? 0.7 : 1;
       this.ring.scale.setScalar(base * (1 + 0.08 * pulse));

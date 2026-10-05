@@ -15,7 +15,8 @@
     "preview": "vite preview",
     "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=server-dist/main.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "start": "node server-dist/main.mjs",
-    "deploy": "gcloud run deploy desk-companion --project quick-catcher-470218-b0 --region us-central1 --source . --set-secrets ANTHROPIC_API_KEY=desk-companion-anthropic-key:latest --max-instances 2 --min-instances 0 --memory 512Mi --cpu 1 --concurrency 40 --timeout 60 --quiet"
+    "deploy": "gcloud run deploy desk-companion --project quick-catcher-470218-b0 --region us-central1 --source . --set-secrets ANTHROPIC_API_KEY=desk-companion-anthropic-key:latest --max-instances 2 --min-instances 0 --memory 512Mi --cpu 1 --concurrency 40 --timeout 60 --quiet",
+    "test": "for f in tests/*.test.mts; do node --no-warnings \"$f\" || exit 1; done"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",

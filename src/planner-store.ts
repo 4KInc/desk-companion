@@ -44,6 +44,8 @@ export interface PlannerState {
   focusTaskId: number;
   /** First-run coach progress. Users who already had data skip it. */
   onboarding: { lineSeen: boolean; done: boolean };
+  /** Accessibility options, chosen on the panel's Options card. */
+  settings: { largeTiles: boolean; highContrast: boolean; reduceMotion: boolean; sound: boolean };
 }
 
 const DB_NAME = 'desk-companion';
@@ -64,6 +66,7 @@ export function emptyState(day = planDay()): PlannerState {
     completions: [],
     focusTaskId: 0,
     onboarding: { lineSeen: false, done: false },
+    settings: { largeTiles: false, highContrast: false, reduceMotion: false, sound: true },
   };
 }
 

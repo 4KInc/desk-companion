@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { adjustEstimate, biasByCategory, biasLine } from '../src/estimates.ts';
+const w = (estimate: number, actual: number) => ({ category: 'writing' as const, estimate, actual });
+assert.equal(biasLine([w(60, 84), w(60, 84)]), undefined, 'needs 3 samples');
+const three = [w(60, 84), w(60, 84), w(60, 84)];
+assert.equal(biasLine(three), 'Your estimates on writing tasks run 40% low.');
+assert.equal(biasLine([...three, { category: 'admin', estimate: 30, actual: 30 }]), 'Your estimates on writing tasks run 40% low.', 'ignores accurate categories');
+assert.equal(biasLine([w(60, 40), w(60, 40), w(60, 40)]), 'Your writing tasks finish 33% faster than you estimate.');
+assert.equal(biasLine([w(60, 66), w(60, 66), w(60, 66)]), undefined, '10% off is not worth mentioning');
+const b = biasByCategory(three);
+assert.deepEqual(adjustEstimate(60, 'writing', b), { minutes: 90, adjusted: true }, '60 * 1.4 = 84 -> rounds to 90');
+assert.deepEqual(adjustEstimate(60, 'coding', b), { minutes: 60, adjusted: false }, 'no data for coding');
+const wild = biasByCategory([w(30, 300), w(30, 300), w(30, 300)]);
+assert.deepEqual(adjustEstimate(60, 'writing', wild), { minutes: 90, adjusted: true }, 'clamped at 1.6x -> 96 -> 90');
+const window = biasByCategory([...Array(20).fill(0).map(() => w(60, 120)), ...Array(20).fill(0).map(() => w(60, 60))]);
+assert.equal(window.get('writing')!.ratio, 1, 'only the most recent 20 count');
+console.log('bias model: all assertions passed');

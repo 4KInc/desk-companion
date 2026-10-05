@@ -83,7 +83,11 @@ export class DeskSounds {
     }
   }
 
+  /** Sound on/off from the Options card. */
+  muted = false;
+
   play(kind: SoundKind, at?: Vector3, delay = 0): void {
+    if (this.muted) return;
     const ctx = this.ctx;
     if (import.meta.env.DEV) console.info(`[sound] ${kind} ${ctx?.state ?? 'no-context'}`);
     if (!ctx || ctx.state !== 'running' || !this.master) return;

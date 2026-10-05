@@ -177,6 +177,25 @@
     color: #3b2a8c;
   }
 
+  .options {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #eef1f5;
+    border-color: #5b616b;
+    border-width: 2px;
+  }
+
+  .option-button {
+    flex-grow: 1;
+    flex-basis: 0;
+    justify-content: center;
+  }
+
   .undo-button {
     flex-shrink: 0;
     justify-content: center;
@@ -198,13 +217,28 @@
     <Button id="hours-up" class="step-button">
       <ButtonLabel>+1h</ButtonLabel>
     </Button>
+    <Button id="options-button" class="step-button">
+      <ButtonLabel>Options</ButtonLabel>
+    </Button>
+  </div>
+  <div id="options-card" class="options" style="display: none">
+    <div class="label">Options</div>
+    <div id="opt-row-1" class="row">
+      <Button id="opt-large" class="option-button"><ButtonLabel id="opt-large-label">Larger tiles: Off</ButtonLabel></Button>
+      <Button id="opt-contrast" class="option-button"><ButtonLabel id="opt-contrast-label">High contrast: Off</ButtonLabel></Button>
+    </div>
+    <div id="opt-row-2" class="row">
+      <Button id="opt-motion" class="option-button"><ButtonLabel id="opt-motion-label">Reduce motion: Off</ButtonLabel></Button>
+      <Button id="opt-sound" class="option-button"><ButtonLabel id="opt-sound-label">Sound: On</ButtonLabel></Button>
+    </div>
+    <Button id="opt-done" class="xr-button"><ButtonLabel>Done</ButtonLabel></Button>
   </div>
   <div id="coach-card" class="coach" style="display: none">
     <div id="coach-text" class="coach-text">Start with your day</div>
   </div>
   <div id="capacity-text" class="capacity">Now 0h / 5h</div>
   <Divider></Divider>
-  <div class="label">Add task</div>
+  <div id="add-label" class="label">Add task</div>
   <div id="add-row" class="row">
     <Button id="add-15" class="add-button"><ButtonLabel>15m</ButtonLabel></Button>
     <Button id="add-30" class="add-button"><ButtonLabel>30m</ButtonLabel></Button>

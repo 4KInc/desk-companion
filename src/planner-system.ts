@@ -62,8 +62,8 @@ const ZONE_MARGIN = 0.025;
 const MAX_DROP_HEIGHT = 0.3;
 const JAR_CATCH_RADIUS = 0.08;
 const JAR_CATCH_HEIGHT = 0.3;
-const INBOX_COLUMNS = 5;
-const INBOX_SPACING = 0.108;
+/** Inbox grid: 5 columns of normal tiles, or 4 wider columns with Larger tiles on. */
+const INBOX_GRID = { normal: { columns: 5, spacing: 0.108 }, large: { columns: 4, spacing: 0.138 } };
 const STACK_GAP = 0.0004;
 const SAVE_DELAY = 0.6;
 /** Leftward hand speed (m/s, tray-relative) that counts as a flick to tomorrow. */
@@ -76,9 +76,16 @@ const FLICK_MIN_TRAVEL = 0.12;
 const UNDO_SECONDS = 8;
 /** A grabbable tile within this distance of a hand lifts and glows, so the pinch closes in free air. */
 const HOVER_RADIUS = 0.1;
+const HOVER_RADIUS_LARGE = 0.13;
 const HOVER_LIFT = 0.015;
 /** Tiles this long landing in Now get the agent's offer to split them into steps. */
 const SPLIT_MIN_MINUTES = 120;
+const OPTION_NAMES = {
+  largeTiles: 'Larger tiles',
+  highContrast: 'High contrast',
+  reduceMotion: 'Reduce motion',
+  sound: 'Sound',
+} as const;
 /** After a tile is set down, the panel offers Focus / Tomorrow / Split buttons for it this long. */
 const TILE_ACTIONS_SECONDS = 10;
 const DAY_CHECK_SECONDS = 30;
@@ -171,6 +178,10 @@ export class PlannerSystem extends createSystem({
   private splitOffer?: StoredTask;
   private splitBusy = false;
   private nudgeVisible = false;
+  private optionsCard?: UIKit.Container;
+  private optionsOpen = false;
+  private dayControls: UIKit.Component[] = [];
+  private readonly optionLabels: Record<string, TextElement | undefined> = {};
   private tileActions?: UIKit.Container;
   private tileActionsText?: TextElement;
   private actionSplit?: UIKit.Component;
@@ -356,6 +367,19 @@ export class PlannerSystem extends createSystem({
     this.splitCard = panel.getElementById('split-card') as UIKit.Container | undefined;
     this.splitText = panel.getElementById('split-text') as TextElement | undefined;
     on('split-accept', () => void this.acceptSplit());
+    this.optionsCard = panel.getElementById('options-card') as UIKit.Container | undefined;
+    for (const id of ['opt-large-label', 'opt-contrast-label', 'opt-motion-label', 'opt-sound-label']) {
+      this.optionLabels[id] = panel.getElementById(id) as TextElement | undefined;
+    }
+    on('options-button', () => this.toggleOptions());
+    this.dayControls = ['add-label', 'add-row', 'status-row', 'jar-text']
+      .map((id) => panel.getElementById(id) as UIKit.Component | undefined)
+      .filter((element): element is UIKit.Component => element !== undefined);
+    on('opt-done', () => this.toggleOptions(false));
+    on('opt-large', () => this.changeSetting('largeTiles'));
+    on('opt-contrast', () => this.changeSetting('highContrast'));
+    on('opt-motion', () => this.changeSetting('reduceMotion'));
+    on('opt-sound', () => this.changeSetting('sound'));
     this.tileActions = panel.getElementById('tile-actions') as UIKit.Container | undefined;
     this.tileActionsText = panel.getElementById('tile-actions-text') as TextElement | undefined;
     this.actionSplit = panel.getElementById('action-split') as UIKit.Component | undefined;
@@ -510,6 +534,8 @@ export class PlannerSystem extends createSystem({
       task.priority ??= 2; // tasks saved before priorities existed
       if (task.zone !== Zone.Tomorrow) this.createTile(task, false);
     }
+    this.state.settings = { ...emptyState().settings, ...this.state.settings };
+    this.applySettings();
     if (this.state.focusTaskId && !this.tilesById.has(this.state.focusTaskId)) this.state.focusTaskId = 0;
     this.applyFocusVisuals();
     this.relayout();
@@ -615,7 +641,10 @@ export class PlannerSystem extends createSystem({
   }
 
   private createTile(task: StoredTask, dropIn: boolean): void {
-    const mesh = createTileMesh(task.title, task.minutes, task.priority);
+    const mesh = createTileMesh(task.title, task.minutes, task.priority, {
+      large: this.state.settings.largeTiles,
+      contrast: this.state.settings.highContrast,
+    });
     const entity = this.world.createTransformEntity(mesh);
     entity.addComponent(TaskTile, {
       taskId: task.id,
@@ -944,6 +973,52 @@ export class PlannerSystem extends createSystem({
     else if (!on && has) entity.removeComponent(DepthOccludable);
   }
 
+  // --- options (accessibility) ----------------------------------------------
+
+  private toggleOptions(open?: boolean): void {
+    this.optionsOpen = open ?? !this.optionsOpen;
+    this.optionsCard?.setProperties({ display: this.optionsOpen ? 'flex' : 'none' });
+    // While Options is open, the day controls step aside so the panel keeps its height
+    // (a taller panel would sink behind the Inbox tiles).
+    const day = this.optionsOpen ? 'none' : 'flex';
+    for (const element of this.dayControls) element.setProperties({ display: day });
+  }
+
+  private changeSetting(key: keyof PlannerState['settings']): void {
+    const settings = this.state.settings;
+    settings[key] = !settings[key];
+    this.applySettings();
+    if (key === 'largeTiles' || key === 'highContrast') this.rebuildTiles();
+    if (key === 'reduceMotion') this.relayout();
+    this.setStatus(`${OPTION_NAMES[key]} ${settings[key] ? 'on' : 'off'}`);
+    this.scheduleSave();
+  }
+
+  /** Pushes settings into sound, the coach and the option labels. */
+  private applySettings(): void {
+    const { largeTiles, highContrast, reduceMotion, sound } = this.state.settings;
+    this.sounds.muted = !sound;
+    this.coach?.setReduceMotion(reduceMotion);
+    const onOff = (on: boolean) => (on ? 'On' : 'Off');
+    this.setText(this.optionLabels['opt-large-label'], `Larger tiles: ${onOff(largeTiles)}`);
+    this.setText(this.optionLabels['opt-contrast-label'], `High contrast: ${onOff(highContrast)}`);
+    this.setText(this.optionLabels['opt-motion-label'], `Reduce motion: ${onOff(reduceMotion)}`);
+    this.setText(this.optionLabels['opt-sound-label'], `Sound: ${onOff(sound)}`);
+  }
+
+  /** Larger tiles / High contrast change how tiles are built: rebuild every tile in place. */
+  private rebuildTiles(): void {
+    for (const entity of this.tilesById.values()) if (entity.hasComponent(Grabbed)) return; // retry next toggle
+    this.focusTimer?.removeFromParent(); // shared label: keep it out of the tiles being disposed
+    for (const [id, entity] of [...this.tilesById]) this.removeTile(id, entity);
+    for (const task of this.state.tasks) {
+      if (task.zone === Zone.Tomorrow) continue;
+      this.createTile(task, false);
+    }
+    this.applyFocusVisuals();
+    this.relayout();
+  }
+
   // --- tile actions (gesture fallbacks) --------------------------------------
 
   /** Buttons for the tile just set down, so flick and chest-pull are shortcuts, not requirements. */
@@ -1113,13 +1188,14 @@ export class PlannerSystem extends createSystem({
       });
     }
 
+    const grid = this.state.settings.largeTiles ? INBOX_GRID.large : INBOX_GRID.normal;
     const columns = [0, 0, 0, 0, 0];
     const inbox = byZone.get(Zone.Inbox)!;
     inbox.forEach((task, index) => {
-      const column = index % INBOX_COLUMNS;
+      const column = index % grid.columns;
       const h = tileThickness(task.minutes);
-      const x = TRAY.inbox.x + (column - (INBOX_COLUMNS - 1) / 2) * INBOX_SPACING;
-      const topOfColumn = index + INBOX_COLUMNS >= inbox.length;
+      const x = TRAY.inbox.x + (column - (grid.columns - 1) / 2) * grid.spacing;
+      const topOfColumn = index + grid.columns >= inbox.length;
       this.applyLayout(task, x, TRAY.surfaceY + columns[column] + h / 2, TRAY.inbox.z, false, topOfColumn);
       columns[column] += h + STACK_GAP;
     });
@@ -1323,7 +1399,7 @@ export class PlannerSystem extends createSystem({
     if (hasLeft) grips.left!.getWorldPosition(this.gripLeft);
     if (hasRight) grips.right!.getWorldPosition(this.gripRight);
     let best: Entity | undefined;
-    let bestDistance = HOVER_RADIUS;
+    let bestDistance = this.state.settings.largeTiles ? HOVER_RADIUS_LARGE : HOVER_RADIUS;
     if (hasLeft || hasRight) {
       for (const entity of this.queries.resting.entities) {
         const object = entity.object3D;
@@ -1418,7 +1494,7 @@ export class PlannerSystem extends createSystem({
 
       this.targetQuat.copy(this.trayQuat);
       if (entity.getValue(TaskTile, 'focused')) this.targetQuat.multiply(this.focusTilt);
-      if (entity.getValue(TaskTile, 'overflow')) {
+      if (entity.getValue(TaskTile, 'overflow') && !this.state.settings.reduceMotion) {
         const phase = time * 9 + entity.getValue(TaskTile, 'taskId')!;
         this.wobble.setFromAxisAngle(this.wobbleAxis, Math.sin(phase) * 0.07);
         this.targetQuat.multiply(this.wobble);

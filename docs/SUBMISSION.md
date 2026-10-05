@@ -23,13 +23,15 @@ final build before submitting on 17 Nov.
 
 **Hands-first.** Every action is a pinch, grab, flick or pull, and every gesture also has a button fallback on the panel. No controller is ever needed.
 
+**Accessible by default.** Every gesture has a button alternative, destructive actions can be undone, and an Options card offers larger tiles (easier to see and pinch), high contrast, reduced motion and sound off. All feedback is visual as well as audible.
+
 **Why passthrough.** The tray, the zones and the stacks live on your real desk at real scale; a stack taller than your coffee mug is a signal you read instantly. With passthrough off the idea breaks.
 
 **How we built it.** Immersive Web SDK (WebXR) with plane detection to find your desk and a pinch-to-place fallback for any surface, hand-pinch grabbing with a hover lift so the pinch closes in free air, real-hand occlusion of lifted tiles where depth sensing is available (Quest 3), procedural spatial sound with no audio files, and IndexedDB storage with no accounts. The agent is Claude, behind a small server on Google Cloud Run so the key never reaches the headset, with structured output for reliable task data, a per-visitor rate limit and a daily cap. The deterministic parts (capacity check, nudge selection, estimation-bias model) run locally and are covered by tests.
 
 **Take it away test.** Without the agent you can still create tiles with the time buttons, sort them by hand, see capacity, focus, wind down and fill the jar. The agent makes it faster, not possible.
 
-**What's next.** Persistent anchors so the tray reappears without re-detecting the desk, larger-tile and high-contrast options, and a Horizon Store PWA.
+**What's next.** Persistent anchors so the tray reappears without re-detecting the desk, and a Horizon Store PWA.
 
 ## Hand interactions (form question)
 

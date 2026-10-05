@@ -1,6 +1,6 @@
 import {
-  BoxGeometry,
   CanvasTexture,
+  ExtrudeGeometry,
   Color,
   Mesh,
   MeshBasicMaterial,
@@ -8,6 +8,7 @@ import {
   PlaneGeometry,
   SRGBColorSpace,
 } from '@iwsdk/core';
+import { roundedRectShape } from './scene-assets/shapes.js';
 
 export const TILE_WIDTH = 0.1;
 export const TILE_DEPTH = 0.07;
@@ -27,14 +28,30 @@ export function formatMinutes(minutes: number): string {
 
 const OVERFLOW = new Color(0xff3b30);
 
-function sideColor(minutes: number): number {
+/** Accessibility options that change how tiles are built. */
+export interface TileStyle {
+  /** 30% bigger footprint: easier to see and to pinch. */
+  large: boolean;
+  /** Saturated colours, heavier type and stronger glow. */
+  contrast: boolean;
+}
+
+export const LARGE_TILE_SCALE = 1.3;
+
+function sideColor(minutes: number, contrast: boolean): number {
+  if (contrast) {
+    if (minutes <= 30) return 0x0a84ff;
+    if (minutes <= 60) return 0x00a37a;
+    if (minutes <= 120) return 0xff9f0a;
+    return 0xff453a;
+  }
   if (minutes <= 30) return 0x7cc6f2;
   if (minutes <= 60) return 0x39b8a8;
   if (minutes <= 120) return 0xf2b544;
   return 0xef7a5a;
 }
 
-function drawLabel(title: string, minutes: number, color: number, priority: number): CanvasTexture {
+function drawLabel(title: string, minutes: number, color: number, priority: number, contrast: boolean): CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 320;
   canvas.height = 224;
@@ -43,16 +60,16 @@ function drawLabel(title: string, minutes: number, color: number, priority: numb
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
   ctx.fillRect(0, 0, canvas.width, 16);
-  ctx.fillStyle = '#1f2328';
-  ctx.font = '600 44px system-ui, sans-serif';
+  ctx.fillStyle = contrast ? '#000000' : '#1f2328';
+  ctx.font = contrast ? '800 48px system-ui, sans-serif' : '600 44px system-ui, sans-serif';
   ctx.textBaseline = 'top';
   let text = title;
   while (ctx.measureText(text).width > canvas.width - 32 && text.length > 4) {
     text = `${text.slice(0, -2)}.`;
   }
   ctx.fillText(text, 16, 48);
-  ctx.fillStyle = '#5b616b';
-  ctx.font = '500 52px system-ui, sans-serif';
+  ctx.fillStyle = contrast ? '#000000' : '#5b616b';
+  ctx.font = contrast ? '800 56px system-ui, sans-serif' : '500 52px system-ui, sans-serif';
   ctx.fillText(formatMinutes(minutes), 16, 128);
   if (priority === 1) {
     // High priority: a bold badge in the corner, readable at arm's length.
@@ -78,27 +95,49 @@ function drawLabel(title: string, minutes: number, color: number, priority: numb
 }
 
 /**
- * A tile box with two draw groups instead of BoxGeometry's six: the five plain
- * faces share material 0 and the labelled top face (+y) uses material 1. With a
- * dozen tiles on the desk this saves ~50 draw calls per eye.
+ * A rounded tile: an extruded rounded rectangle, centred on its origin like a box.
+ * Two draw groups (sides + labelled top), as before: ExtrudeGeometry puts the caps
+ * in group 0 and the sides in group 1, so the indices are swapped to match the
+ * [side, top] material order, and the cap UVs are remapped so the label spans the
+ * top face and reads from the user's side (+Z).
  */
-function tileGeometry(thickness: number): BoxGeometry {
-  const geometry = new BoxGeometry(TILE_WIDTH, thickness, TILE_DEPTH);
-  // BoxGeometry face order is +x, -x, +y, -y, +z, -z, six indices each; move +y last.
-  const index = Array.from(geometry.index!.array);
-  const top = index.slice(12, 18);
-  geometry.setIndex([...index.slice(0, 12), ...index.slice(18), ...top]);
-  geometry.clearGroups();
-  geometry.addGroup(0, 30, 0);
-  geometry.addGroup(30, 6, 1);
+function tileGeometry(width: number, thickness: number, depth: number): ExtrudeGeometry {
+  const bevel = Math.min(0.0015, thickness / 3);
+  const shape = roundedRectShape(width - 2 * bevel, depth - 2 * bevel, Math.min(0.012, width * 0.12));
+  const geometry = new ExtrudeGeometry(shape, {
+    depth: thickness - 2 * bevel,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 1,
+    curveSegments: 4,
+  });
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(0, bevel - thickness / 2, 0);
+  for (const group of geometry.groups) group.materialIndex = group.materialIndex === 0 ? 1 : 0;
+  const position = geometry.getAttribute('position');
+  const uv = geometry.getAttribute('uv');
+  for (const group of geometry.groups) {
+    if (group.materialIndex !== 1) continue; // only the caps carry the label
+    for (let i = group.start; i < group.start + group.count; i++) {
+      uv.setXY(i, (position.getX(i) + width / 2) / width, (depth / 2 - position.getZ(i)) / depth);
+    }
+  }
+  uv.needsUpdate = true;
+  geometry.computeVertexNormals();
   return geometry;
 }
 
 /** Builds one tile mesh. Materials are per-tile so overflow tinting stays local. */
-export function createTileMesh(title: string, minutes: number, priority = 2): Mesh {
-  const color = sideColor(minutes);
+export function createTileMesh(
+  title: string,
+  minutes: number,
+  priority = 2,
+  style: TileStyle = { large: false, contrast: false },
+): Mesh {
+  const color = sideColor(minutes, style.contrast);
   const side = new MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.5 });
-  const label = drawLabel(title, minutes, color, priority);
+  const label = drawLabel(title, minutes, color, priority, style.contrast);
   const top = new MeshStandardMaterial({
     map: label,
     emissiveMap: label,
@@ -106,9 +145,12 @@ export function createTileMesh(title: string, minutes: number, priority = 2): Me
     emissiveIntensity: 0.35,
     roughness: 0.7,
   });
-  const mesh = new Mesh(tileGeometry(tileThickness(minutes)), [side, top]);
+  const scale = style.large ? LARGE_TILE_SCALE : 1;
+  const mesh = new Mesh(tileGeometry(TILE_WIDTH * scale, tileThickness(minutes), TILE_DEPTH * scale), [side, top]);
   mesh.name = `tile-${title}`;
   mesh.userData.baseColor = color;
+  mesh.userData.contrast = style.contrast;
+  applyTileGlow(mesh);
   return mesh;
 }
 
@@ -135,8 +177,9 @@ function applyTileGlow(mesh: Mesh): void {
     side.emissive.setHex(mesh.userData.baseColor as number);
     top.emissive.setHex(0xffffff);
   }
-  side.emissiveIntensity = (overflow ? 0.9 : 0.25) + (hover ? 0.5 : 0);
-  top.emissiveIntensity = (overflow ? 0.55 : 0.35) + (hover ? 0.3 : 0);
+  const boost = mesh.userData.contrast === true ? 0.2 : 0;
+  side.emissiveIntensity = (overflow ? 0.9 : 0.25) + (hover ? 0.5 : 0) + boost;
+  top.emissiveIntensity = (overflow ? 0.55 : 0.35) + (hover ? 0.3 : 0) + boost;
 }
 
 /** Frees the per-tile materials and label texture. */

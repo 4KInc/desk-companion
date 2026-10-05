@@ -23,9 +23,12 @@ components and XR features. In dev, **Alt+Shift+R** resets to a brand-new user.
 ## Checks
 
 ```sh
+npm test                 # logic tests: day rollover, streaks, jar layers, bias model, coach steps
 npm run typecheck
 npm run build && npm run build:server
 ```
+
+The concept brief is generated from `docs/briefs-src/` (`python3 docs/briefs-src/build.py`, needs reportlab).
 
 ## Demo run (video recording)
 
