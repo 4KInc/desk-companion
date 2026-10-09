@@ -26,6 +26,9 @@ World.create(
     connect: (source) => planner?.connectCalendar(source) ?? Promise.reject(new Error('Not ready yet')),
     disconnect: () => planner?.disconnectCalendar(),
     connected: () => planner?.calendarState() ?? { url: '', sample: false },
+  }, {
+    list: () => planner?.draftsList() ?? [],
+    onChange: (listener) => planner?.setDraftListener(listener),
   });
   world.visibilityState.subscribe((visibility) => {
     overlay.hidden = visibility !== VisibilityState.NonImmersive;

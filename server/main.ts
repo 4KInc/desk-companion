@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
-import { handleBrainDumpRequest, handleSplitRequest } from './brain-dump.js';
+import { handleBrainDumpRequest, handleDelegateRequest, handleSplitRequest } from './brain-dump.js';
 import { handleCalendarRequest } from './calendar.js';
 
 /**
@@ -173,7 +173,9 @@ async function api(req: IncomingMessage, res: ServerResponse, pathname: string):
       ? handleSplitRequest
       : pathname === '/api/calendar'
         ? handleCalendarRequest
-        : handleBrainDumpRequest;
+        : pathname === '/api/delegate'
+          ? handleDelegateRequest
+          : handleBrainDumpRequest;
   const response = await handler(
     new Request(`http://localhost${pathname}`, {
       method: req.method,
@@ -213,7 +215,7 @@ async function staticFile(req: IncomingMessage, res: ServerResponse, pathname: s
 
 createServer((req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-  const isApi = pathname === '/api/brain-dump' || pathname === '/api/split-task' || pathname === '/api/calendar';
+  const isApi = ['/api/brain-dump', '/api/split-task', '/api/calendar', '/api/delegate'].includes(pathname);
   const handled =
     pathname === '/api/diagnostics'
       ? diagnostics(req, res)

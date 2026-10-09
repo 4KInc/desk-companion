@@ -135,3 +135,45 @@ export async function splitTaskSteps(title: string, minutes: number): Promise<{ 
   }));
   return { steps, source: 'local' };
 }
+
+export interface TaskDraft {
+  kind: 'email' | 'message' | 'outline' | 'checklist' | 'notes';
+  title: string;
+  body: string;
+  nextStep: string;
+}
+
+/** Hands one task to the agent for a short first draft; offline, a simple checklist head start. */
+export async function draftForTask(
+  title: string,
+  minutes: number,
+  category: string,
+): Promise<{ draft: TaskDraft; source: 'agent' | 'local' }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}api/delegate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title, minutes, category }),
+      signal: controller.signal,
+    });
+    if (response.ok) {
+      const body = (await response.json()) as { draft?: TaskDraft };
+      if (body.draft?.body) return { draft: body.draft, source: 'agent' };
+    }
+  } catch {
+    // fall through to the local head start
+  } finally {
+    clearTimeout(timer);
+  }
+  return {
+    source: 'local',
+    draft: {
+      kind: 'checklist',
+      title: title.slice(0, 60),
+      body: `1. Write down what "done" looks like for: ${title}\n2. Gather what you need (links, notes, people)\n3. Do the first 25 minutes without stopping\n4. Review, then finish or split what is left`,
+      nextStep: 'Start with step 1: define done in one sentence',
+    },
+  };
+}

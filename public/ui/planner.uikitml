@@ -196,6 +196,13 @@
     justify-content: center;
   }
 
+  .draft-body {
+    font-size: 14px;
+    line-height: 18px;
+    color: #1f2328;
+    white-space: pre-line;
+  }
+
   .undo-button {
     flex-shrink: 0;
     justify-content: center;
@@ -220,6 +227,21 @@
     <Button id="options-button" class="step-button">
       <ButtonLabel>Options</ButtonLabel>
     </Button>
+  </div>
+  <div id="draft-card" class="options" style="display: none">
+    <div id="draft-title" class="recap-title">Draft</div>
+    <div id="draft-lines" style="flex-direction: column; gap: 3px">
+      <div id="draft-line-0" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-1" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-2" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-3" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-4" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-5" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-6" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-7" class="draft-body" style="display: none">-</div>
+    </div>
+    <div id="draft-next" class="jar">Next:</div>
+    <Button id="draft-close" class="xr-button"><ButtonLabel>Done reading</ButtonLabel></Button>
   </div>
   <div id="options-card" class="options" style="display: none">
     <div class="label">Options</div>
@@ -280,6 +302,7 @@
     <Button id="action-focus" class="undo-button"><ButtonLabel>Focus</ButtonLabel></Button>
     <Button id="action-tomorrow" class="undo-button"><ButtonLabel>Tomorrow</ButtonLabel></Button>
     <Button id="action-split" class="undo-button" style="display: none"><ButtonLabel>Split</ButtonLabel></Button>
+    <Button id="action-draft" class="undo-button"><ButtonLabel>Draft</ButtonLabel></Button>
   </div>
   <div id="status-row" class="row">
     <div id="status-text" class="status" style="flex-grow: 1; flex-shrink: 1">Pinch a tile and drop it in a zone</div>

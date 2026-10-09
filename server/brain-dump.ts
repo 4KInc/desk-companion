@@ -161,3 +161,66 @@ export async function handleSplitRequest(request: Request): Promise<Response> {
     return Response.json({ error: 'Agent unavailable' }, { status: 503 });
   }
 }
+
+// --- hand a task to the agent: a short first draft ----------------------------------
+
+const Draft = z.object({
+  kind: z.enum(['email', 'message', 'outline', 'checklist', 'notes']).describe('The most useful shape for a head start on this task'),
+  title: z.string().describe('Short title for the draft, at most 60 characters'),
+  body: z.string().describe('The draft itself, plain text with line breaks, at most 120 words'),
+  nextStep: z.string().describe('The one thing the person should do next to finish it, at most 80 characters'),
+});
+
+export type DraftResult = z.infer<typeof Draft>;
+
+const DELEGATE_PROMPT = `You give someone a head start on one task from their day plan by writing a short, practical first draft they can finish themselves.
+
+- Pick the most useful shape: an email or message draft for communication tasks, an outline for writing, a checklist for multi-step work, notes for thinking tasks.
+- Never invent facts the task does not state (names, numbers, dates, decisions). Use [placeholders] for them instead.
+- Plain text only, no markdown symbols. At most 120 words.
+- nextStep is the single concrete action to finish the task.`;
+
+export async function draftTask(title: string, minutes: number, category: string): Promise<DraftResult | undefined> {
+  client ??= new Anthropic();
+  const response = await client.beta.messages.parse({
+    model: 'claude-opus-5-5',
+    max_tokens: 2000,
+    output_config: { effort: 'low', format: betaZodOutputFormat(Draft) },
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    system: DELEGATE_PROMPT,
+    messages: [{ role: 'user', content: `Task: ${title}\nEstimate: ${minutes} minutes\nKind of work: ${category}` }],
+  });
+  if (response.stop_reason === 'refusal' || !response.parsed_output) return undefined;
+  const draft = response.parsed_output;
+  return {
+    kind: draft.kind,
+    title: draft.title.trim().slice(0, 60),
+    body: draft.body.trim().slice(0, 1200),
+    nextStep: draft.nextStep.trim().slice(0, 100),
+  };
+}
+
+/** Web-standard handler: POST { title, minutes, category } -> { draft }. */
+export async function handleDelegateRequest(request: Request): Promise<Response> {
+  if (request.method !== 'POST') return Response.json({ error: 'POST only' }, { status: 405 });
+  let body: { title?: unknown; minutes?: unknown; category?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return Response.json({ error: 'Expected JSON { title, minutes, category }' }, { status: 400 });
+  }
+  const title = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
+  const minutes = typeof body.minutes === 'number' ? Math.min(480, Math.max(5, body.minutes)) : 30;
+  const category = typeof body.category === 'string' ? body.category.slice(0, 20) : 'other';
+  if (!title) return Response.json({ error: 'Need a task title' }, { status: 400 });
+  try {
+    const draft = await draftTask(title, minutes, category);
+    return draft ? Response.json({ draft }) : Response.json({ error: 'No draft' }, { status: 502 });
+  } catch (error) {
+    if (error instanceof Anthropic.RateLimitError) return Response.json({ error: 'Rate limited' }, { status: 429 });
+    if (error instanceof Anthropic.APIError) return Response.json({ error: 'Agent error' }, { status: 502 });
+    console.error('[delegate] failed:', error instanceof Error ? error.name : typeof error);
+    return Response.json({ error: 'Agent unavailable' }, { status: 503 });
+  }
+}

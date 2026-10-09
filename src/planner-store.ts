@@ -17,8 +17,22 @@ export interface StoredTask {
   /** Meeting start and end (epoch ms). */
   startMs?: number;
   endMs?: number;
+  /** The agent's latest draft for this task, if any. */
+  draftId?: number;
   zone: Zone;
   order: number;
+}
+
+/** A first draft the agent wrote for a task (kept on this device, most recent last). */
+export interface StoredDraft {
+  id: number;
+  taskId: number;
+  taskTitle: string;
+  kind: string;
+  title: string;
+  body: string;
+  nextStep: string;
+  day: string;
 }
 
 export interface DayRecord {
@@ -49,6 +63,8 @@ export interface PlannerState {
   focusTaskId: number;
   /** First-run coach progress. Users who already had data skip it. */
   onboarding: { lineSeen: boolean; done: boolean };
+  /** First drafts the agent wrote for tasks; the 20 most recent. */
+  drafts: StoredDraft[];
   /** Calendar link (kept only on this device) or the built-in sample day. */
   calendar: { url: string; sample: boolean };
   /** Accessibility options, chosen on the panel's Options card. */
@@ -75,6 +91,7 @@ export function emptyState(day = planDay()): PlannerState {
     onboarding: { lineSeen: false, done: false },
     settings: { largeTiles: false, highContrast: false, reduceMotion: false, sound: true },
     calendar: { url: '', sample: false },
+    drafts: [],
   };
 }
 

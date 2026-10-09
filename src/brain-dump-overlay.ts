@@ -9,16 +9,31 @@ export interface CalendarActions {
   connected(): { url: string; sample: boolean };
 }
 
+export interface DraftView {
+  id: number;
+  kind: string;
+  title: string;
+  body: string;
+  nextStep: string;
+}
+
+export interface DraftActions {
+  list(): DraftView[];
+  onChange(listener: (drafts: DraftView[]) => void): void;
+}
+
 export function mountBrainDumpOverlay(
   onSubmit: (text: string) => Promise<number>,
   calendar?: CalendarActions,
+  drafts?: DraftActions,
 ): HTMLElement {
   const card = document.createElement('form');
   card.id = 'brain-dump';
   card.style.cssText =
     'position:fixed;left:20px;bottom:20px;width:320px;padding:14px 16px;border-radius:16px;' +
     'background:#fbfcfe;color:#1f2328;font:14px/1.4 system-ui,sans-serif;' +
-    'box-shadow:0 8px 28px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:8px;z-index:10';
+    'box-shadow:0 8px 28px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:8px;z-index:10;' +
+    'max-height:calc(100vh - 40px);overflow-y:auto;box-sizing:border-box';
   card.innerHTML = `
     <strong style="font-size:17px">Brain dump</strong>
     <textarea id="brain-dump-text" rows="5" placeholder="What's on your mind today? One thing per line, or just write it out."
@@ -38,6 +53,10 @@ export function mountBrainDumpOverlay(
           style="flex:1;border:1px solid #5b6576;border-radius:999px;padding:8px;background:#fff;color:#5b6576;font:600 13px system-ui,sans-serif;cursor:pointer">Try a sample day</button>
       </div>
       <span id="calendar-status" style="color:#5b616b;font-size:12px">Meetings appear as fixed blocks in Now. The link stays on this device.</span>
+    </div>
+    <div id="drafts" style="border-top:1px solid #e1e5ea;margin-top:4px;padding-top:8px;display:none;flex-direction:column;gap:6px;max-height:220px;overflow:auto">
+      <strong style="font-size:15px">Drafts from the agent</strong>
+      <div id="drafts-list" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>`;
   const text = card.querySelector<HTMLTextAreaElement>('#brain-dump-text')!;
   const submit = card.querySelector<HTMLButtonElement>('#brain-dump-submit')!;
@@ -57,6 +76,7 @@ export function mountBrainDumpOverlay(
     }
   });
   if (calendar) wireCalendar(card, calendar);
+  if (drafts) wireDrafts(card, drafts);
   document.body.appendChild(card);
   return card;
 }
@@ -104,4 +124,43 @@ function wireCalendar(card: HTMLElement, calendar: CalendarActions): void {
   sample.addEventListener('click', () => void run('sample', sample));
   // Saved state loads asynchronously; reflect it once it is there.
   setTimeout(showConnected, 1500);
+}
+
+/** Latest drafts with a Copy button: how a draft leaves the app and becomes a real email or doc. */
+function wireDrafts(card: HTMLElement, drafts: DraftActions): void {
+  const section = card.querySelector<HTMLDivElement>('#drafts')!;
+  const list = card.querySelector<HTMLDivElement>('#drafts-list')!;
+  const render = (items: DraftView[]) => {
+    section.style.display = items.length > 0 ? 'flex' : 'none';
+    list.replaceChildren(
+      ...items.slice(-5).reverse().map((draft, index) => {
+        const item = document.createElement('div');
+        item.style.cssText = 'border:1px solid #e1e5ea;border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:4px';
+        const title = document.createElement('strong');
+        title.style.fontSize = '13px';
+        title.textContent = draft.title;
+        const body = document.createElement('div');
+        body.style.cssText = 'white-space:pre-wrap;font-size:12px;color:#3d434b;max-height:72px;overflow:hidden';
+        body.textContent = draft.body;
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = 'Copy';
+        copy.setAttribute('aria-label', `Copy draft: ${draft.title}`);
+        copy.dataset.testid = `draft-copy-${index}`;
+        copy.style.cssText = 'align-self:flex-start;border:0;border-radius:999px;padding:5px 12px;background:#2fb5a8;color:#fff;font:600 12px system-ui,sans-serif;cursor:pointer';
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(`${draft.body}\n\nNext: ${draft.nextStep}`);
+            copy.textContent = 'Copied';
+          } catch {
+            copy.textContent = 'Select and copy the text';
+          }
+        });
+        item.append(title, body, copy);
+        return item;
+      }),
+    );
+  };
+  drafts.onChange(render);
+  render(drafts.list());
 }

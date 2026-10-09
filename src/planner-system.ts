@@ -20,7 +20,7 @@ import {
   VisibilityState,
   type Entity,
 } from '@iwsdk/core';
-import { splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
+import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { CoachVisuals } from './coach.js';
@@ -40,6 +40,7 @@ import {
   rollover,
   saveState,
   type PlannerState,
+  type StoredDraft,
   type StoredTask,
 } from './planner-store.js';
 import { TRAY } from './scene-assets/day-tray.scene-asset.js';
@@ -90,6 +91,30 @@ const FOCUS_LINES = [
 ];
 /** Gentle check-in cadence while focusing (minutes). */
 const CHECK_IN_MINUTES = 25;
+/** Releasing a tile this close to the buddy hands it to the agent for a first draft. */
+const BUDDY_CATCH_RADIUS = 0.1;
+const MAX_DRAFTS = 20;
+/** Lines the panel's draft reader shows; the full draft is on the 2D page. */
+const DRAFT_LINES = 8;
+
+/** Splits a draft into display lines: real line breaks, or inline "1. ... 2. ..." / " - " items. */
+function draftLines(body: string): string[] {
+  let lines = body.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (lines.length <= 2) {
+    lines = body
+      .split(/\s+(?=\d+[.)]\s)|\s+-\s+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+  return lines.map((line) => (line.length > 110 ? `${line.slice(0, 107)}...` : line));
+}
+const DRAFT_KIND_LABEL: Record<string, string> = {
+  email: 'Email draft',
+  message: 'Message draft',
+  outline: 'Outline',
+  checklist: 'Checklist',
+  notes: 'Notes',
+};
 const OPTION_NAMES = {
   largeTiles: 'Larger tiles',
   highContrast: 'High contrast',
@@ -168,6 +193,16 @@ export class PlannerSystem extends createSystem({
   private coach?: CoachVisuals;
   private readonly strata: Mesh[] = [];
   private companion?: Companion;
+  private buddyNode?: Object3D;
+  private draftCard?: UIKit.Container;
+  private draftTitle?: TextElement;
+  private draftLines: TextElement[] = [];
+  private draftNext?: TextElement;
+  private draftOpen = false;
+  private drafting = false;
+  private draftSheet?: Mesh;
+  private draftListener?: (drafts: StoredDraft[]) => void;
+  private readonly buddyWorld = new Vector3();
   private focusSessionMs = 0;
   private coachCard?: UIKit.Container;
   private coachText?: TextElement;
@@ -269,7 +304,10 @@ export class PlannerSystem extends createSystem({
     this.buildTrayDecorations();
     this.coach = new CoachVisuals(tray, jar);
     const buddy = this.world.getSceneObject('desk-buddy');
-    if (buddy) this.companion = new Companion(buddy);
+    if (buddy) {
+      this.companion = new Companion(buddy);
+      this.buddyNode = buddy;
+    }
     this.buildJarStrata();
     this.bindPanel(panel);
     this.bound = true;
@@ -400,6 +438,13 @@ export class PlannerSystem extends createSystem({
     on('action-focus', () => this.tileAction('focus'));
     on('action-tomorrow', () => this.tileAction('tomorrow'));
     on('action-split', () => this.tileAction('split'));
+    on('action-draft', () => this.tileAction('draft'));
+    this.draftCard = panel.getElementById('draft-card') as UIKit.Container | undefined;
+    this.draftTitle = panel.getElementById('draft-title') as TextElement | undefined;
+    this.draftLines = Array.from({ length: DRAFT_LINES }, (_, i) => panel.getElementById(`draft-line-${i}`) as TextElement | undefined)
+      .filter((line): line is TextElement => line !== undefined);
+    this.draftNext = panel.getElementById('draft-next') as TextElement | undefined;
+    on('draft-close', () => this.closeDraft());
     on('split-dismiss', () => this.dismissSplit());
     on('undo-button', () => this.performUndo());
     on('took-less', () => this.answerTook('less'));
@@ -551,6 +596,8 @@ export class PlannerSystem extends createSystem({
     this.state.settings = { ...emptyState().settings, ...this.state.settings };
     this.applySettings();
     this.state.calendar = { ...emptyState().calendar, ...this.state.calendar };
+    this.state.drafts ??= [];
+    this.draftListener?.([...this.state.drafts]);
     if (this.state.focusTaskId && !this.tilesById.has(this.state.focusTaskId)) this.state.focusTaskId = 0;
     if (this.state.calendar.url || this.state.calendar.sample) void this.syncCalendar().catch(() => undefined);
     this.applyFocusVisuals();
@@ -734,6 +781,16 @@ export class PlannerSystem extends createSystem({
       return;
     }
 
+    if (this.buddyNode && task.kind !== 'meeting') {
+      this.buddyNode.getWorldPosition(this.buddyWorld);
+      const near = Math.hypot(this.world3.x - this.buddyWorld.x, this.world3.z - this.buddyWorld.z) < BUDDY_CATCH_RADIUS;
+      const dy = this.world3.y - this.buddyWorld.y;
+      if (near && dy > -0.03 && dy < 0.25) {
+        this.relayout(); // the tile floats back to its zone while the agent works
+        void this.delegate(task);
+        return;
+      }
+    }
     if (this.isAtChest(this.world3)) {
       this.sounds.play('focusStart', this.world3);
       this.startFocus(task);
@@ -839,12 +896,12 @@ export class PlannerSystem extends createSystem({
 
   /** At most one card at a time keeps the panel short: recap, then how-long, then nudge, then split. */
   private refreshCards(): void {
-    this.tookCard?.setProperties({ display: this.pendingTook && !this.recapOpen ? 'flex' : 'none' });
+    this.tookCard?.setProperties({ display: this.pendingTook && !this.recapOpen && !this.readerOpen() ? 'flex' : 'none' });
     this.refreshSplitCard();
   }
 
   private refreshSplitCard(): void {
-    const show = this.splitOffer && !this.recapOpen && !this.pendingTook && !this.nudgeVisible;
+    const show = this.splitOffer && !this.recapOpen && !this.pendingTook && !this.nudgeVisible && !this.readerOpen();
     this.splitCard?.setProperties({ display: show ? 'flex' : 'none' });
   }
 
@@ -1021,9 +1078,21 @@ export class PlannerSystem extends createSystem({
   private toggleOptions(open?: boolean): void {
     this.optionsOpen = open ?? !this.optionsOpen;
     this.optionsCard?.setProperties({ display: this.optionsOpen ? 'flex' : 'none' });
+    this.refreshCards();
+    this.relayout();
     // While Options is open, the day controls step aside so the panel keeps its height
     // (a taller panel would sink behind the Inbox tiles).
-    const day = this.optionsOpen ? 'none' : 'flex';
+    this.refreshDayControls();
+  }
+
+  /** True while Options or the draft reader is open: other cards wait so the panel stays short. */
+  private readerOpen(): boolean {
+    return this.optionsOpen || this.draftOpen;
+  }
+
+  /** Options and the draft reader need room: the day controls step aside while either is open. */
+  private refreshDayControls(): void {
+    const day = this.optionsOpen || this.draftOpen ? 'none' : 'flex';
     for (const element of this.dayControls) element.setProperties({ display: day });
   }
 
@@ -1061,6 +1130,111 @@ export class PlannerSystem extends createSystem({
     }
     this.applyFocusVisuals();
     this.relayout();
+  }
+
+  // --- hand a task to the agent ----------------------------------------------
+
+  /** The agent writes a short first draft for a task; the buddy works on it and hands it back. */
+  private async delegate(task: StoredTask): Promise<void> {
+    if (this.drafting || task.kind === 'meeting') return;
+    this.drafting = true;
+    const short = task.title.length > 28 ? `${task.title.slice(0, 27)}.` : task.title;
+    this.companion?.setMode('working');
+    this.companion?.say(`On it. Drafting "${short}"...`, 5);
+    this.setStatus(`The agent is drafting "${task.title}"...`);
+    try {
+      const { draft, source } = await draftForTask(task.title, task.minutes, task.category ?? 'other');
+      const stored: StoredDraft = {
+        id: this.state.nextId++,
+        taskId: task.id,
+        taskTitle: task.title,
+        kind: draft.kind,
+        title: draft.title,
+        body: draft.body,
+        nextStep: draft.nextStep,
+        day: this.state.day,
+      };
+      this.state.drafts.push(stored);
+      if (this.state.drafts.length > MAX_DRAFTS) this.state.drafts.shift();
+      task.draftId = stored.id;
+      this.showDraft(stored);
+      this.placeDraftSheet(stored);
+      this.sounds.play('pop');
+      this.companion?.say(`Draft ready: ${stored.title}. It's on the panel.`);
+      this.setStatus(`${source === 'agent' ? 'Agent drafted' : 'Offline head start for'} "${task.title}"`);
+      this.draftListener?.([...this.state.drafts]);
+      this.scheduleSave();
+    } finally {
+      this.drafting = false;
+      this.companion?.setMode(this.state.focusTaskId ? 'working' : 'idle');
+    }
+  }
+
+  private showDraft(draft: StoredDraft): void {
+    // One element per line: UIKit text collapses line breaks, and checklists need their shape.
+    const lines = draftLines(draft.body);
+    const shown = lines.slice(0, DRAFT_LINES);
+    if (lines.length > DRAFT_LINES) shown[DRAFT_LINES - 1] = '... (full draft on the page)';
+    this.setText(this.draftTitle, `${DRAFT_KIND_LABEL[draft.kind] ?? 'Draft'}: ${draft.title}`);
+    this.draftLines.forEach((element, i) => {
+      element.setProperties({ display: i < shown.length ? 'flex' : 'none' });
+      if (i < shown.length) this.setText(element, shown[i]);
+    });
+    this.setText(this.draftNext, `Next: ${draft.nextStep}`);
+    this.draftOpen = true;
+    this.draftCard?.setProperties({ display: 'flex' });
+    this.refreshDayControls();
+    this.refreshCards();
+    this.relayout();
+  }
+
+  private closeDraft(): void {
+    this.draftOpen = false;
+    this.draftCard?.setProperties({ display: 'none' });
+    this.refreshDayControls();
+    this.refreshCards();
+    this.relayout();
+  }
+
+  /** A paper sheet on the desk in front of the buddy: the agent's work, made physical. */
+  private placeDraftSheet(draft: StoredDraft): void {
+    if (!this.draftSheet) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 320;
+      const texture = new CanvasTexture(canvas);
+      texture.colorSpace = SRGBColorSpace;
+      this.draftSheet = new Mesh(new PlaneGeometry(0.075, 0.094), new MeshBasicMaterial({ map: texture }));
+      this.draftSheet.name = 'draft-sheet';
+      this.draftSheet.rotation.x = -Math.PI / 2;
+      this.draftSheet.userData.canvas = canvas;
+      this.draftSheet.position.set(-0.39, 0.0015, 0.17);
+      this.tray.add(this.draftSheet);
+    }
+    const canvas = this.draftSheet.userData.canvas as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#fbfcfe';
+    ctx.fillRect(0, 0, 256, 320);
+    ctx.fillStyle = '#2fb5a8';
+    ctx.fillRect(0, 0, 256, 44);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 26px system-ui, sans-serif';
+    ctx.fillText((DRAFT_KIND_LABEL[draft.kind] ?? 'Draft').toUpperCase(), 14, 31);
+    ctx.fillStyle = '#1f2328';
+    ctx.font = '600 24px system-ui, sans-serif';
+    draft.title.match(/.{1,18}(\s|$)/g)?.slice(0, 3).forEach((line, i) => ctx.fillText(line.trim(), 14, 84 + i * 30));
+    ctx.fillStyle = '#c9d1db';
+    for (let i = 0; i < 6; i++) ctx.fillRect(14, 186 + i * 20, 228 - (i % 3) * 40, 6); // text lines
+    ((this.draftSheet.material as MeshBasicMaterial).map as CanvasTexture).needsUpdate = true;
+    this.draftSheet.visible = true;
+  }
+
+  draftsList(): StoredDraft[] {
+    return [...(this.state.drafts ?? [])];
+  }
+
+  setDraftListener(listener: (drafts: StoredDraft[]) => void): void {
+    this.draftListener = listener;
   }
 
   // --- calendar --------------------------------------------------------------
@@ -1164,7 +1338,7 @@ export class PlannerSystem extends createSystem({
     this.tileActions?.setProperties({ display: 'none' });
   }
 
-  private tileAction(action: 'focus' | 'tomorrow' | 'split'): void {
+  private tileAction(action: 'focus' | 'tomorrow' | 'split' | 'draft'): void {
     const task = this.touched;
     this.hideTileActions();
     const entity = task ? this.tilesById.get(task.id) : undefined;
@@ -1174,6 +1348,8 @@ export class PlannerSystem extends createSystem({
       this.startFocus(task);
     } else if (action === 'tomorrow') {
       this.deferTask(entity, task);
+    } else if (action === 'draft') {
+      void this.delegate(task);
     } else {
       this.splitOffer = task;
       void this.acceptSplit();
@@ -1384,7 +1560,8 @@ export class PlannerSystem extends createSystem({
     this.nudgeKey = `${picks.map((task) => task.id).sort((a, b) => a - b).join(',')}@${this.state.capacityHours}`;
     // Wind-down is for clearing the day, not replanning it: no nudge while the recap is open.
     // Overflow is the core moment, so the nudge outranks a pending split offer (which waits).
-    const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook;
+    const show =
+      picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook && !this.readerOpen();
     if (show && !this.nudgeVisible) {
       this.companion?.say(`You're ${formatMinutes(over)} over your day. I picked what could wait.`);
     }
