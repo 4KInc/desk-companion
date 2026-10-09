@@ -32,12 +32,12 @@
         "role": "hero",
         "projection": "perspective",
         "position": [
-          0.12,
+          0.0,
           1.2,
           0.3
         ],
         "target": [
-          0.06,
+          0.0,
           0.75,
           -0.42
         ],
@@ -103,6 +103,32 @@
               0,
               0.04
             ]
+          }
+        },
+        {
+          "id": "desk-buddy",
+          "name": "Desk Buddy",
+          "metadata": {
+            "iwsdk.validation": {
+              "allowFloating": true
+            }
+          },
+          "content": {
+            "type": "asset",
+            "asset": "desk-buddy"
+          },
+          "transform": {
+            "position": [
+              -0.38,
+              0,
+              0.03
+            ],
+            "rotationDeg": [
+              0,
+              20,
+              0
+            ],
+            "scale": 1.35
           }
         },
         {

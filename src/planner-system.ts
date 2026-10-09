@@ -25,6 +25,7 @@ import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './cal
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { CoachVisuals } from './coach.js';
 import { adjustEstimate, biasByCategory, biasLine, MIN_SAMPLES, type Category } from './estimates.js';
+import { Companion } from './companion.js';
 import { DeskSounds } from './sound.js';
 import { speechRecognitionConstructor, type SpeechRecognitionLike } from './speech.js';
 import { DeskPlacement, PlacementState, TaskTile, Zone } from './planner-components.js';
@@ -81,6 +82,14 @@ const HOVER_RADIUS_LARGE = 0.13;
 const HOVER_LIFT = 0.015;
 /** Tiles this long landing in Now get the agent's offer to split them into steps. */
 const SPLIT_MIN_MINUTES = 120;
+/** Body-doubling lines: the buddy settles in to work alongside you. */
+const FOCUS_LINES = [
+  "I'll work on my stuff too. You've got this.",
+  "Let's do this together. I'll be right here.",
+  'Focus time. I am working alongside you.',
+];
+/** Gentle check-in cadence while focusing (minutes). */
+const CHECK_IN_MINUTES = 25;
 const OPTION_NAMES = {
   largeTiles: 'Larger tiles',
   highContrast: 'High contrast',
@@ -158,6 +167,8 @@ export class PlannerSystem extends createSystem({
   private splitting = false;
   private coach?: CoachVisuals;
   private readonly strata: Mesh[] = [];
+  private companion?: Companion;
+  private focusSessionMs = 0;
   private coachCard?: UIKit.Container;
   private coachText?: TextElement;
   private coachNow: CoachStep = 'off';
@@ -257,6 +268,8 @@ export class PlannerSystem extends createSystem({
     this.jarFill = fill;
     this.buildTrayDecorations();
     this.coach = new CoachVisuals(tray, jar);
+    const buddy = this.world.getSceneObject('desk-buddy');
+    if (buddy) this.companion = new Companion(buddy);
     this.buildJarStrata();
     this.bindPanel(panel);
     this.bound = true;
@@ -625,6 +638,9 @@ export class PlannerSystem extends createSystem({
         total += estimate.minutes;
         this.pushTask({ ...draft, minutes: estimate.minutes });
       }
+      if (tasks.length > 0) {
+        this.companion?.say(`I made ${tasks.length} tiles, ${formatMinutes(total)}. Sort them into Now, Later and Drop.`);
+      }
       this.soundAt.set(TRAY.inbox.x, TRAY.surfaceY, TRAY.inbox.z);
       this.tray.localToWorld(this.soundAt);
       for (let i = 0; i < tasks.length; i++) this.sounds.play('pop', this.soundAt, i * 0.08);
@@ -883,6 +899,7 @@ export class PlannerSystem extends createSystem({
         this.sounds.play('pop', origin, 0.08 + i * 0.07);
       });
       const total = steps.reduce((sum, step) => sum + step.minutes, 0);
+      this.companion?.say(`Split into ${steps.length} steps. Start with the first one.`);
       this.setStatus(
         `${source === 'agent' ? 'Agent split' : 'Split (offline)'} "${parent.title}" into ${steps.length} steps, ${formatMinutes(total)}`,
       );
@@ -910,6 +927,9 @@ export class PlannerSystem extends createSystem({
   private startFocus(task: StoredTask): void {
     if (this.state.focusTaskId && this.state.focusTaskId !== task.id) this.stopFocus();
     this.state.focusTaskId = task.id;
+    this.focusSessionMs = 0;
+    this.companion?.setMode('working');
+    this.companion?.say(FOCUS_LINES[Math.floor(Math.random() * FOCUS_LINES.length)]);
     this.applyFocusVisuals();
     this.relayout();
     this.setStatus(`Focusing on "${task.title}". Jar it when done, or set it down to pause`);
@@ -919,6 +939,9 @@ export class PlannerSystem extends createSystem({
   private stopFocus(): void {
     if (!this.state.focusTaskId) return;
     this.state.focusTaskId = 0;
+    this.companion?.setMode('idle');
+    const minutes = Math.round(this.focusSessionMs / 60000);
+    if (minutes >= 1) this.companion?.say(`Nice. ${formatMinutes(minutes)} of focus together.`, 4);
     this.applyFocusVisuals();
     this.relayout();
   }
@@ -927,6 +950,7 @@ export class PlannerSystem extends createSystem({
   private applyFocusVisuals(): void {
     const focusId = this.state.focusTaskId;
     this.focusTask = focusId ? this.state.tasks.find((task) => task.id === focusId) : undefined;
+    this.companion?.setMode(focusId ? 'working' : 'idle'); // also restores the pose after a reload
     for (const [id, entity] of this.tilesById) {
       entity.setValue(TaskTile, 'focused', id === focusId);
       if (!entity.hasComponent(Grabbed)) this.setOccludable(entity, id === focusId);
@@ -948,6 +972,12 @@ export class PlannerSystem extends createSystem({
     const task = this.focusTask;
     if (!task || this.world.visibilityState.peek() === VisibilityState.VisibleBlurred) return;
     task.focusMs = (task.focusMs ?? 0) + delta * 1000;
+    const before = Math.floor(this.focusSessionMs / (CHECK_IN_MINUTES * 60000));
+    this.focusSessionMs += delta * 1000;
+    if (Math.floor(this.focusSessionMs / (CHECK_IN_MINUTES * 60000)) > before) {
+      this.companion?.say(`${formatMinutes(Math.round(this.focusSessionMs / 60000))} in. Stretch for a minute, or keep going?`, 8);
+      this.sounds.play('pop');
+    }
     this.focusTick -= delta;
     if (this.focusTick > 0) return;
     this.focusTick = 1;
@@ -1012,6 +1042,7 @@ export class PlannerSystem extends createSystem({
     const { largeTiles, highContrast, reduceMotion, sound } = this.state.settings;
     this.sounds.muted = !sound;
     this.coach?.setReduceMotion(reduceMotion);
+    this.companion?.setReduceMotion(reduceMotion);
     const onOff = (on: boolean) => (on ? 'On' : 'Off');
     this.setText(this.optionLabels['opt-large-label'], `Larger tiles: ${onOff(largeTiles)}`);
     this.setText(this.optionLabels['opt-contrast-label'], `High contrast: ${onOff(highContrast)}`);
@@ -1071,6 +1102,12 @@ export class PlannerSystem extends createSystem({
     const meetings = sample ? sampleMeetings(this.state.day) : await fetchMeetings(url, this.state.day);
     this.replaceMeetings(meetings);
     const total = meetings.reduce((sum, m) => sum + Math.round((m.end - m.start) / 60000), 0);
+    const free = Math.max(0, this.state.capacityHours * 60 - total);
+    this.companion?.say(
+      meetings.length === 0
+        ? 'No meetings today. The whole day is yours.'
+        : `${meetings.length} meetings today. That leaves ${formatMinutes(free)} for your own work.`,
+    );
     const message =
       meetings.length === 0
         ? 'No meetings today. The whole day is yours'
@@ -1233,6 +1270,7 @@ export class PlannerSystem extends createSystem({
   private confirmEndDay(): void {
     const dropped = endDay(this.state);
     this.sounds.play('endDay');
+    this.companion?.say(`Nice work today. ${this.state.streak}-day streak. See you tomorrow.`);
     for (const id of dropped) {
       const entity = this.tilesById.get(id);
       if (entity && !entity.hasComponent(Grabbed)) this.removeTile(id, entity);
@@ -1347,6 +1385,9 @@ export class PlannerSystem extends createSystem({
     // Wind-down is for clearing the day, not replanning it: no nudge while the recap is open.
     // Overflow is the core moment, so the nudge outranks a pending split offer (which waits).
     const show = picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook;
+    if (show && !this.nudgeVisible) {
+      this.companion?.say(`You're ${formatMinutes(over)} over your day. I picked what could wait.`);
+    }
     this.nudgeVisible = show;
     this.refreshSplitCard();
     this.nudgeTaskIds = show ? picks.map((task) => task.id) : [];
@@ -1564,6 +1605,7 @@ export class PlannerSystem extends createSystem({
     this.updateHover();
     this.sounds.updateListener(this.player.head);
     this.tickCoach(delta);
+    this.companion?.update(delta, this.player.head);
     if (this.touchedTimer > 0) {
       this.touchedTimer -= delta;
       if (this.touchedTimer <= 0) this.hideTileActions();
