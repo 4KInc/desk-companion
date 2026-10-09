@@ -291,6 +291,6 @@
     <Button id="move-tray-button" class="xr-button" style="display: none"><ButtonLabel id="movetray-label">Move tray</ButtonLabel></Button>
     <Button id="dictate-button" class="xr-button" style="display: none"><ButtonLabel id="dictate-label">Dictate</ButtonLabel></Button>
     <Button id="xr-button" class="xr-button"><ButtonLabel>Enter XR</ButtonLabel></Button>
-    <Button id="exit-button" class="xr-button" style="display: none"><ButtonLabel>Exit XR</ButtonLabel></Button>
+    <Button id="exit-button" class="xr-button" style="display: none"><ButtonLabel>Exit</ButtonLabel></Button>
   </div>
 </Panel>

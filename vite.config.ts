@@ -25,10 +25,16 @@ function brainDumpDevApi(): Plugin {
       Object.assign(process.env, loadEnv(server.config.mode, process.cwd(), 'ANTHROPIC_'));
       server.middlewares.use(async (req, res, next) => {
         const path = (req.url ?? '').split('?')[0];
-        if (path !== '/api/brain-dump' && path !== '/api/split-task') return next();
+        if (path !== '/api/brain-dump' && path !== '/api/split-task' && path !== '/api/calendar') return next();
         const body = req.method === 'POST' ? await readBody(req) : undefined;
         const api = await server.ssrLoadModule('/server/brain-dump.ts');
-        const handler = path === '/api/split-task' ? api.handleSplitRequest : api.handleBrainDumpRequest;
+        const calendar = await server.ssrLoadModule('/server/calendar.ts');
+        const handler =
+          path === '/api/split-task'
+            ? api.handleSplitRequest
+            : path === '/api/calendar'
+              ? calendar.handleCalendarRequest
+              : api.handleBrainDumpRequest;
         const response: Response = await handler(
           new Request(`http://localhost${path}`, {
             method: req.method,

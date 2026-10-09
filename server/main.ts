@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { handleBrainDumpRequest, handleSplitRequest } from './brain-dump.js';
+import { handleCalendarRequest } from './calendar.js';
 
 /**
  * Production server (Cloud Run): serves the Vite build and the brain-dump API
@@ -167,7 +168,12 @@ async function api(req: IncomingMessage, res: ServerResponse, pathname: string):
     send(res, 413, JSON.stringify({ error: 'Request too large' }));
     return;
   }
-  const handler = pathname === '/api/split-task' ? handleSplitRequest : handleBrainDumpRequest;
+  const handler =
+    pathname === '/api/split-task'
+      ? handleSplitRequest
+      : pathname === '/api/calendar'
+        ? handleCalendarRequest
+        : handleBrainDumpRequest;
   const response = await handler(
     new Request(`http://localhost${pathname}`, {
       method: req.method,
@@ -207,7 +213,7 @@ async function staticFile(req: IncomingMessage, res: ServerResponse, pathname: s
 
 createServer((req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-  const isApi = pathname === '/api/brain-dump' || pathname === '/api/split-task';
+  const isApi = pathname === '/api/brain-dump' || pathname === '/api/split-task' || pathname === '/api/calendar';
   const handled =
     pathname === '/api/diagnostics'
       ? diagnostics(req, res)

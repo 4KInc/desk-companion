@@ -22,7 +22,11 @@ World.create(
   world.registerSystem(PlannerSystem);
   if (playtestEnabled()) world.registerSystem(PlaytestSystem); // opt-in: ?playtest=1
   const planner = world.getSystem(PlannerSystem);
-  const overlay = mountBrainDumpOverlay((text) => planner?.addBrainDump(text) ?? Promise.resolve(0));
+  const overlay = mountBrainDumpOverlay((text) => planner?.addBrainDump(text) ?? Promise.resolve(0), {
+    connect: (source) => planner?.connectCalendar(source) ?? Promise.reject(new Error('Not ready yet')),
+    disconnect: () => planner?.disconnectCalendar(),
+    connected: () => planner?.calendarState() ?? { url: '', sample: false },
+  });
   world.visibilityState.subscribe((visibility) => {
     overlay.hidden = visibility !== VisibilityState.NonImmersive;
   });

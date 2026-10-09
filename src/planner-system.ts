@@ -21,6 +21,7 @@ import {
   type Entity,
 } from '@iwsdk/core';
 import { splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
+import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { CoachVisuals } from './coach.js';
 import { adjustEstimate, biasByCategory, biasLine, MIN_SAMPLES, type Category } from './estimates.js';
@@ -536,7 +537,9 @@ export class PlannerSystem extends createSystem({
     }
     this.state.settings = { ...emptyState().settings, ...this.state.settings };
     this.applySettings();
+    this.state.calendar = { ...emptyState().calendar, ...this.state.calendar };
     if (this.state.focusTaskId && !this.tilesById.has(this.state.focusTaskId)) this.state.focusTaskId = 0;
+    if (this.state.calendar.url || this.state.calendar.sample) void this.syncCalendar().catch(() => undefined);
     this.applyFocusVisuals();
     this.relayout();
     this.refreshJar();
@@ -570,6 +573,7 @@ export class PlannerSystem extends createSystem({
     this.refreshJar();
     this.closeRecap();
     this.setStatus('A new day. Yesterday\'s tomorrow pile is back in the Inbox');
+    if (this.state.calendar.url || this.state.calendar.sample) void this.syncCalendar().catch(() => undefined);
     this.scheduleSave();
   }
 
@@ -641,10 +645,17 @@ export class PlannerSystem extends createSystem({
   }
 
   private createTile(task: StoredTask, dropIn: boolean): void {
-    const mesh = createTileMesh(task.title, task.minutes, task.priority, {
-      large: this.state.settings.largeTiles,
-      contrast: this.state.settings.highContrast,
-    });
+    const meetingTime =
+      task.kind === 'meeting' && task.startMs && task.endMs
+        ? `${clockTime(task.startMs)}-${clockTime(task.endMs)}`
+        : undefined;
+    const mesh = createTileMesh(
+      task.title,
+      task.minutes,
+      task.priority,
+      { large: this.state.settings.largeTiles, contrast: this.state.settings.highContrast },
+      meetingTime,
+    );
     const entity = this.world.createTransformEntity(mesh);
     entity.addComponent(TaskTile, {
       taskId: task.id,
@@ -731,7 +742,9 @@ export class PlannerSystem extends createSystem({
       task.zone = zone;
       task.order = this.maxOrder(zone) + 1;
       if (zone === Zone.Drop) this.offerUndo('drop', task, from.zone, from.order);
-      if (zone === Zone.Now && task.minutes >= SPLIT_MIN_MINUTES && !task.splitDeclined) this.offerSplit(task);
+      if (zone === Zone.Now && task.kind !== 'meeting' && task.minutes >= SPLIT_MIN_MINUTES && !task.splitDeclined) {
+        this.offerSplit(task);
+      }
       const where = zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1);
       this.setStatus(paused ? `${paused}, moved to ${where}` : `${task.title} moved to ${where}`);
     } else if (paused) {
@@ -1019,6 +1032,81 @@ export class PlannerSystem extends createSystem({
     this.relayout();
   }
 
+  // --- calendar --------------------------------------------------------------
+
+  /** Connects a private iCal link, or 'sample' for the built-in sample day. Returns a short status. */
+  async connectCalendar(source: string): Promise<string> {
+    const sample = source === 'sample';
+    const previous = this.state.calendar;
+    this.state.calendar = { url: sample ? '' : source.trim(), sample };
+    try {
+      const message = await this.syncCalendar();
+      // Meetings fill a real workday: if the day length was never changed, assume 8 hours.
+      if (this.state.capacityHours === emptyState().capacityHours) {
+        this.state.capacityHours = 8;
+        this.relayout();
+      }
+      this.scheduleSave();
+      return message;
+    } catch (error) {
+      this.state.calendar = previous;
+      throw error;
+    }
+  }
+
+  calendarState(): { url: string; sample: boolean } {
+    return { ...this.state.calendar };
+  }
+
+  disconnectCalendar(): void {
+    this.state.calendar = { url: '', sample: false };
+    this.replaceMeetings([]);
+    this.setStatus('Calendar disconnected');
+  }
+
+  /** Re-reads today's meetings and lays them in Now as fixed tiles. */
+  async syncCalendar(): Promise<string> {
+    const { url, sample } = this.state.calendar;
+    if (!this.bound || (!url && !sample)) return 'No calendar connected';
+    const meetings = sample ? sampleMeetings(this.state.day) : await fetchMeetings(url, this.state.day);
+    this.replaceMeetings(meetings);
+    const total = meetings.reduce((sum, m) => sum + Math.round((m.end - m.start) / 60000), 0);
+    const message =
+      meetings.length === 0
+        ? 'No meetings today. The whole day is yours'
+        : `${sample ? 'Sample day: ' : ''}${meetings.length} meetings, ${formatMinutes(total)}. They sit at the bottom of Now`;
+    this.setStatus(message);
+    return message;
+  }
+
+  private replaceMeetings(meetings: DayMeeting[]): void {
+    for (const task of this.state.tasks) {
+      if (task.kind !== 'meeting') continue;
+      const entity = this.tilesById.get(task.id);
+      if (entity) this.removeTile(task.id, entity);
+    }
+    this.state.tasks = this.state.tasks.filter((task) => task.kind !== 'meeting');
+    for (const meeting of meetings) {
+      const start = new Date(meeting.start);
+      const task: StoredTask = {
+        id: this.state.nextId++,
+        title: meeting.title,
+        minutes: Math.max(5, Math.round((meeting.end - meeting.start) / 60000)),
+        priority: 1,
+        zone: Zone.Now,
+        order: -10000 + start.getHours() * 60 + start.getMinutes(), // bottom of Now, in time order
+        kind: 'meeting',
+        startMs: meeting.start,
+        endMs: meeting.end,
+        splitDeclined: true,
+      };
+      this.state.tasks.push(task);
+      this.createTile(task, true);
+    }
+    this.relayout();
+    this.scheduleSave();
+  }
+
   // --- tile actions (gesture fallbacks) --------------------------------------
 
   /** Buttons for the tile just set down, so flick and chest-pull are shortcuts, not requirements. */
@@ -1108,12 +1196,16 @@ export class PlannerSystem extends createSystem({
     const { doneCount, doneMinutes } = this.state.today;
     const tomorrow = count(Zone.Tomorrow);
     const dropping = count(Zone.Drop);
-    const carrying = count(Zone.Now);
+    const carrying = this.state.tasks.filter((task) => task.zone === Zone.Now && task.kind !== 'meeting').length;
+    const meetingTotal = this.state.tasks
+      .filter((task) => task.kind === 'meeting')
+      .reduce((sum, task) => sum + task.minutes, 0);
     const lines = [
       doneCount === 0
         ? `Nothing went in the jar today${planned > 0 ? ` (you planned ${formatMinutes(planned)})` : ''}. That happens.`
         : `You planned ${formatMinutes(planned)} and finished ${formatMinutes(doneMinutes)}: ${doneCount} ${doneCount === 1 ? 'task' : 'tasks'} in the jar.`,
     ];
+    if (meetingTotal > 0) lines.push(`Meetings took ${formatMinutes(meetingTotal)} of your ${this.state.capacityHours}h day.`);
     if (tomorrow > 0) lines.push(`${tomorrow} pushed to tomorrow.`);
     if (dropping > 0) lines.push(`${dropping} in Drop will be cleared.`);
     if (carrying > 0) lines.push(`${carrying} still in Now ${carrying === 1 ? 'carries' : 'carry'} over.`);
@@ -1171,6 +1263,7 @@ export class PlannerSystem extends createSystem({
 
     const capacityTop = TRAY.surfaceY + this.state.capacityHours * METRES_PER_HOUR;
     let nowMinutes = focused?.zone === Zone.Now ? focused.minutes : 0;
+    let meetingMinutes = 0;
     let anyOverflow = false;
     for (const zone of STACK_ZONES) {
       const centre = ZONE_CENTRE[zone];
@@ -1183,7 +1276,10 @@ export class PlannerSystem extends createSystem({
         if (zone === Zone.Now) nowMinutes += task.minutes;
         const overflow = zone === Zone.Now && nowMinutes > this.state.capacityHours * 60;
         anyOverflow ||= overflow;
-        this.applyLayout(task, centre.x, y + h / 2, centre.z, overflow, index === stack.length - 1);
+        if (task.kind === 'meeting') meetingMinutes += task.minutes;
+        // Meetings are fixed weight at the bottom of Now: never grabbable.
+        const grabbable = index === stack.length - 1 && task.kind !== 'meeting';
+        this.applyLayout(task, centre.x, y + h / 2, centre.z, overflow, grabbable);
         y += h + STACK_GAP;
       });
     }
@@ -1216,9 +1312,10 @@ export class PlannerSystem extends createSystem({
     this.setText(
       this.capacityText,
       `Now ${formatMinutes(nowMinutes)} / ${this.state.capacityHours}h` +
+        (meetingMinutes > 0 ? ` (${formatMinutes(meetingMinutes)} meetings)` : '') +
         (over > 0 ? `  -  over by ${formatMinutes(over)}` : ''),
     );
-    this.updateNudge(byZone.get(Zone.Now)!, over);
+    this.updateNudge(byZone.get(Zone.Now)!.filter((task) => task.kind !== 'meeting'), over);
   }
 
   // --- capacity nudge ---------------------------------------------------

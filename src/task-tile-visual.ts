@@ -51,7 +51,14 @@ function sideColor(minutes: number, contrast: boolean): number {
   return 0xef7a5a;
 }
 
-function drawLabel(title: string, minutes: number, color: number, priority: number, contrast: boolean): CanvasTexture {
+function drawLabel(
+  title: string,
+  minutes: number,
+  color: number,
+  priority: number,
+  contrast: boolean,
+  meetingTime?: string,
+): CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 320;
   canvas.height = 224;
@@ -70,8 +77,18 @@ function drawLabel(title: string, minutes: number, color: number, priority: numb
   ctx.fillText(text, 16, 48);
   ctx.fillStyle = contrast ? '#000000' : '#5b616b';
   ctx.font = contrast ? '800 56px system-ui, sans-serif' : '500 52px system-ui, sans-serif';
-  ctx.fillText(formatMinutes(minutes), 16, 128);
-  if (priority === 1) {
+  ctx.fillText(meetingTime ?? formatMinutes(minutes), 16, 128);
+  if (meetingTime) {
+    // A small calendar mark: meetings come from the calendar and cannot be moved.
+    const x = canvas.width - 72;
+    ctx.fillStyle = contrast ? '#000000' : '#5b6576';
+    ctx.fillRect(x, 132, 52, 44);
+    ctx.fillStyle = '#f7f9fc';
+    ctx.fillRect(x + 5, 146, 42, 25);
+    ctx.fillStyle = contrast ? '#000000' : '#5b6576';
+    ctx.fillRect(x + 10, 124, 6, 14);
+    ctx.fillRect(x + 36, 124, 6, 14);
+  } else if (priority === 1) {
     // High priority: a bold badge in the corner, readable at arm's length.
     ctx.fillStyle = '#e8643c';
     ctx.beginPath();
@@ -134,10 +151,12 @@ export function createTileMesh(
   minutes: number,
   priority = 2,
   style: TileStyle = { large: false, contrast: false },
+  meetingTime?: string,
 ): Mesh {
-  const color = sideColor(minutes, style.contrast);
+  // Meetings are slate grey whatever their length: fixed weight, not your own work.
+  const color = meetingTime ? (style.contrast ? 0x3c4454 : 0x6b7486) : sideColor(minutes, style.contrast);
   const side = new MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.5 });
-  const label = drawLabel(title, minutes, color, priority, style.contrast);
+  const label = drawLabel(title, minutes, color, priority, style.contrast, meetingTime);
   const top = new MeshStandardMaterial({
     map: label,
     emissiveMap: label,

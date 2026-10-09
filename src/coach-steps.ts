@@ -11,7 +11,8 @@ export type CoachStep = 'add' | 'sort' | 'line' | 'jar' | 'complete' | 'off';
 export function coachStep(state: PlannerState): CoachStep {
   const onboarding = state.onboarding;
   if (!onboarding || onboarding.done) return 'off';
-  const onTray = state.tasks.filter((task) => task.zone !== 'tomorrow');
+  // Calendar meetings arrive pre-sorted in Now; only the user's own tasks teach the loop.
+  const onTray = state.tasks.filter((task) => task.zone !== 'tomorrow' && task.kind !== 'meeting');
   const sorted = onTray.some((task) => task.zone === 'now' || task.zone === 'later' || task.zone === 'drop');
   if (state.jar.count > 0) return 'complete';
   if (onTray.length === 0) return 'add';

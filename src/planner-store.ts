@@ -12,6 +12,11 @@ export interface StoredTask {
   focusMs?: number;
   /** The user said Keep to the agent's offer to split this task; don't ask again. */
   splitDeclined?: boolean;
+  /** 'meeting' tiles come from the calendar: fixed in Now, never grabbed, refreshed daily. */
+  kind?: 'task' | 'meeting';
+  /** Meeting start and end (epoch ms). */
+  startMs?: number;
+  endMs?: number;
   zone: Zone;
   order: number;
 }
@@ -44,6 +49,8 @@ export interface PlannerState {
   focusTaskId: number;
   /** First-run coach progress. Users who already had data skip it. */
   onboarding: { lineSeen: boolean; done: boolean };
+  /** Calendar link (kept only on this device) or the built-in sample day. */
+  calendar: { url: string; sample: boolean };
   /** Accessibility options, chosen on the panel's Options card. */
   settings: { largeTiles: boolean; highContrast: boolean; reduceMotion: boolean; sound: boolean };
 }
@@ -67,6 +74,7 @@ export function emptyState(day = planDay()): PlannerState {
     focusTaskId: 0,
     onboarding: { lineSeen: false, done: false },
     settings: { largeTiles: false, highContrast: false, reduceMotion: false, sound: true },
+    calendar: { url: '', sample: false },
   };
 }
 
@@ -144,7 +152,8 @@ export function rollover(state: PlannerState, today = planDay()): boolean {
   }
   let order = 0;
   for (const task of state.tasks) if (task.zone === 'inbox') order = Math.max(order, task.order);
-  state.tasks = state.tasks.filter((task) => task.zone !== 'drop');
+  // Yesterday's meetings are over; today's are fetched fresh from the calendar.
+  state.tasks = state.tasks.filter((task) => task.zone !== 'drop' && task.kind !== 'meeting');
   for (const task of state.tasks) {
     if (task.zone !== 'tomorrow') continue;
     task.zone = 'inbox';
