@@ -46,3 +46,12 @@ pids/
 
 # Production server bundle
 server-dist/
+
+# Quest APK packaging: signing keys and build output never enter git
+twa/*.keystore
+twa/*.apk
+twa/*.aab
+twa/app/
+twa/gradle*
+twa/build/
+twa/.gradle/

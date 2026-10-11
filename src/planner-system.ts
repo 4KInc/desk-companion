@@ -23,6 +23,7 @@ import {
 import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
+import { matchingMeeting } from './meeting-match.js';
 import { CoachVisuals } from './coach.js';
 import { adjustEstimate, biasByCategory, biasLine, MIN_SAMPLES, type Category } from './estimates.js';
 import { Companion } from './companion.js';
@@ -92,7 +93,7 @@ const FOCUS_LINES = [
 /** Gentle check-in cadence while focusing (minutes). */
 const CHECK_IN_MINUTES = 25;
 /** Releasing a tile this close to the buddy hands it to the agent for a first draft. */
-const BUDDY_CATCH_RADIUS = 0.1;
+const BUDDY_CATCH_RADIUS = 0.12;
 const MAX_DRAFTS = 20;
 /** Lines the panel's draft reader shows; the full draft is on the 2D page. */
 const DRAFT_LINES = 8;
@@ -202,6 +203,10 @@ export class PlannerSystem extends createSystem({
   private drafting = false;
   private draftSheet?: Mesh;
   private draftListener?: (drafts: StoredDraft[]) => void;
+  private calendarListener?: () => void;
+  private buddyReady = false;
+  private statusBeforeCatch = '';
+  private lastStatus = '';
   private readonly buddyWorld = new Vector3();
   private focusSessionMs = 0;
   private coachCard?: UIKit.Container;
@@ -599,7 +604,9 @@ export class PlannerSystem extends createSystem({
     this.state.drafts ??= [];
     this.draftListener?.([...this.state.drafts]);
     if (this.state.focusTaskId && !this.tilesById.has(this.state.focusTaskId)) this.state.focusTaskId = 0;
-    if (this.state.calendar.url || this.state.calendar.sample) void this.syncCalendar().catch(() => undefined);
+    this.calendarListener?.();
+    if (!this.state.welcomed) void this.welcome();
+    else if (this.state.calendar.url || this.state.calendar.sample) void this.syncCalendar().catch(() => undefined);
     this.applyFocusVisuals();
     this.relayout();
     this.refreshJar();
@@ -674,7 +681,16 @@ export class PlannerSystem extends createSystem({
     this.splitting = true;
     this.setStatus('Sorting your brain dump into tasks...');
     try {
-      const { tasks, source } = await splitBrainDump(trimmed);
+      const split = await splitBrainDump(trimmed);
+      const source = split.source;
+      // Anything already on today's calendar is a meeting tile; don't count its time twice.
+      const meetings = this.state.tasks.filter((task) => task.kind === 'meeting');
+      const skipped: StoredTask[] = [];
+      const tasks = split.tasks.filter((draft) => {
+        const meeting = matchingMeeting(draft.title, meetings);
+        if (meeting) skipped.push(meeting);
+        return !meeting;
+      });
       // Gently correct estimates for kinds of work this person reliably under- or over-estimates.
       const biases = biasByCategory(this.state.completions);
       let adjusted = 0;
@@ -686,7 +702,11 @@ export class PlannerSystem extends createSystem({
         this.pushTask({ ...draft, minutes: estimate.minutes });
       }
       if (tasks.length > 0) {
-        this.companion?.say(`I made ${tasks.length} tiles, ${formatMinutes(total)}. Sort them into Now, Later and Drop.`);
+        const already =
+          skipped.length === 0
+            ? ''
+            : ` ${skipped.length === 1 ? `"${skipped[0].title}" is` : `${skipped.length} of those are`} already on your calendar.`;
+        this.companion?.say(`I made ${tasks.length} tiles, ${formatMinutes(total)}.${already} Sort them into Now, Later and Drop.`);
       }
       this.soundAt.set(TRAY.inbox.x, TRAY.surfaceY, TRAY.inbox.z);
       this.tray.localToWorld(this.soundAt);
@@ -695,7 +715,9 @@ export class PlannerSystem extends createSystem({
       this.scheduleSave();
       this.setStatus(
         tasks.length === 0
-          ? 'No tasks found in that. Try one task per line'
+          ? skipped.length > 0
+            ? 'Everything there is already on your calendar'
+            : 'No tasks found in that. Try one task per line'
           : `${source === 'agent' ? 'Agent made' : 'Made (offline)'} ${tasks.length} tiles, ${formatMinutes(total)} in all.` +
               (adjusted > 0
                 ? ` Adjusted ${adjusted} ${adjusted === 1 ? 'estimate' : 'estimates'} from your history.`
@@ -781,15 +803,10 @@ export class PlannerSystem extends createSystem({
       return;
     }
 
-    if (this.buddyNode && task.kind !== 'meeting') {
-      this.buddyNode.getWorldPosition(this.buddyWorld);
-      const near = Math.hypot(this.world3.x - this.buddyWorld.x, this.world3.z - this.buddyWorld.z) < BUDDY_CATCH_RADIUS;
-      const dy = this.world3.y - this.buddyWorld.y;
-      if (near && dy > -0.03 && dy < 0.25) {
-        this.relayout(); // the tile floats back to its zone while the agent works
-        void this.delegate(task);
-        return;
-      }
+    if (task.kind !== 'meeting' && this.isOverBuddy(this.world3)) {
+      this.relayout(); // the tile floats back to its zone while the agent works
+      void this.delegate(task);
+      return;
     }
     if (this.isAtChest(this.world3)) {
       this.sounds.play('focusStart', this.world3);
@@ -1240,23 +1257,55 @@ export class PlannerSystem extends createSystem({
   // --- calendar --------------------------------------------------------------
 
   /** Connects a private iCal link, or 'sample' for the built-in sample day. Returns a short status. */
-  async connectCalendar(source: string): Promise<string> {
+  async connectCalendar(source: string, greeting = ''): Promise<string> {
     const sample = source === 'sample';
     const previous = this.state.calendar;
+    const previousHours = this.state.capacityHours;
     this.state.calendar = { url: sample ? '' : source.trim(), sample };
+    // Meetings fill a real workday: if the day length was never changed, assume 8 hours.
+    if (this.state.capacityHours === emptyState().capacityHours) this.state.capacityHours = 8;
     try {
-      const message = await this.syncCalendar();
-      // Meetings fill a real workday: if the day length was never changed, assume 8 hours.
-      if (this.state.capacityHours === emptyState().capacityHours) {
-        this.state.capacityHours = 8;
-        this.relayout();
-      }
+      const message = await this.syncCalendar(greeting);
+      this.relayout();
       this.scheduleSave();
       return message;
     } catch (error) {
       this.state.calendar = previous;
+      this.state.capacityHours = previousHours;
       throw error;
     }
+  }
+
+  /**
+   * First visit: a judge or new user should see the whole idea within a minute, so the
+   * buddy says hello and a sample day fills Now with meetings. Their own link replaces it.
+   */
+  private async welcome(): Promise<void> {
+    this.state.welcomed = true;
+    if (!this.state.calendar.url && !this.state.calendar.sample) {
+      await this.connectCalendar('sample', "Hi, I'm your desk buddy! ").catch(() => undefined);
+      // Then the one thing to do next, unless they have already started.
+      setTimeout(() => {
+        if (this.state.tasks.some((task) => task.kind !== 'meeting')) return;
+        const inBrowser = this.world.visibilityState.peek() === VisibilityState.NonImmersive;
+        this.companion?.say(
+          inBrowser
+            ? "What's on your mind today? Type it in the box, or tap Use an example."
+            : this.canDictate
+              ? "What's on your mind today? Pinch Dictate and say it, or pinch a time button."
+              : "What's on your mind today? Pinch 15m, 30m, 1h or 2h to add a task.",
+          9,
+        );
+      }, 10500);
+    } else {
+      this.companion?.say("Hi, I'm your desk buddy. Tell me what's on your mind and I'll make tiles.", 9);
+    }
+    this.calendarListener?.();
+    this.scheduleSave();
+  }
+
+  setCalendarListener(listener: () => void): void {
+    this.calendarListener = listener;
   }
 
   calendarState(): { url: string; sample: boolean } {
@@ -1270,7 +1319,7 @@ export class PlannerSystem extends createSystem({
   }
 
   /** Re-reads today's meetings and lays them in Now as fixed tiles. */
-  async syncCalendar(): Promise<string> {
+  async syncCalendar(greeting = ''): Promise<string> {
     const { url, sample } = this.state.calendar;
     if (!this.bound || (!url && !sample)) return 'No calendar connected';
     const meetings = sample ? sampleMeetings(this.state.day) : await fetchMeetings(url, this.state.day);
@@ -1278,9 +1327,13 @@ export class PlannerSystem extends createSystem({
     const total = meetings.reduce((sum, m) => sum + Math.round((m.end - m.start) / 60000), 0);
     const free = Math.max(0, this.state.capacityHours * 60 - total);
     this.companion?.say(
-      meetings.length === 0
-        ? 'No meetings today. The whole day is yours.'
-        : `${meetings.length} meetings today. That leaves ${formatMinutes(free)} for your own work.`,
+      greeting +
+        (meetings.length === 0
+          ? 'No meetings today. The whole day is yours.'
+          : sample
+            ? `Sample day: ${meetings.length} meetings, ${formatMinutes(free)} left for your work.`
+            : `${meetings.length} meetings today. That leaves ${formatMinutes(free)} for your own work.`),
+      greeting ? 10 : 7,
     );
     const message =
       meetings.length === 0
@@ -1674,6 +1727,7 @@ export class PlannerSystem extends createSystem({
   }
 
   private setStatus(text: string): void {
+    this.lastStatus = text;
     this.setText(this.statusText, text);
   }
 
@@ -1737,6 +1791,34 @@ export class PlannerSystem extends createSystem({
   }
 
   /** Remembers each held tile's recent peak leftward speed (tray-relative) for flick detection. */
+  /** Whether a released tile at `point` would land with the buddy. */
+  private isOverBuddy(point: Vector3): boolean {
+    if (!this.buddyNode) return false;
+    this.buddyNode.getWorldPosition(this.buddyWorld);
+    const dy = point.y - this.buddyWorld.y;
+    return Math.hypot(point.x - this.buddyWorld.x, point.z - this.buddyWorld.z) < BUDDY_CATCH_RADIUS && dy > -0.03 && dy < 0.25;
+  }
+
+  /** Hands have no hover cue: the buddy raises its hands while a held tile is over it. */
+  private trackBuddyCatch(): void {
+    let over = false;
+    for (const entity of this.queries.held.entities) {
+      const object = entity.object3D;
+      if (!object) continue;
+      object.getWorldPosition(this.world3);
+      if (this.isOverBuddy(this.world3)) over = true;
+    }
+    if (over === this.buddyReady) return;
+    this.buddyReady = over;
+    this.companion?.setReady(over);
+    if (over) {
+      this.statusBeforeCatch = this.lastStatus;
+      this.setStatus('Let go to hand it to your buddy: it writes a first draft');
+    } else if (this.queries.held.entities.size > 0) {
+      this.setStatus(this.statusBeforeCatch || 'Pinch a tile and drop it in a zone');
+    }
+  }
+
   private trackFlicks(delta: number): void {
     if (delta <= 0) return;
     const decay = Math.exp(-delta / FLICK_MEMORY);
@@ -1778,11 +1860,14 @@ export class PlannerSystem extends createSystem({
     this.tray.getWorldQuaternion(this.trayQuat);
     this.trayRight.set(1, 0, 0).applyQuaternion(this.trayQuat);
     this.trackFlicks(delta);
+    this.trackBuddyCatch();
     this.tickFocus(delta);
     this.updateHover();
     this.sounds.updateListener(this.player.head);
     this.tickCoach(delta);
-    this.companion?.update(delta, this.player.head);
+    // In the browser the rendered camera is not the XR head: face whichever one is drawing.
+    const viewer = this.world.visibilityState.peek() === VisibilityState.NonImmersive ? this.world.camera : this.player.head;
+    this.companion?.update(delta, viewer);
     if (this.touchedTimer > 0) {
       this.touchedTimer -= delta;
       if (this.touchedTimer <= 0) this.hideTileActions();

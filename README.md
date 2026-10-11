@@ -25,18 +25,21 @@ components and XR features. In dev, **Alt+Shift+R** resets to a brand-new user.
 ## Checks
 
 ```sh
-npm test                 # logic tests: day rollover, streaks, jar layers, bias model, coach steps, calendar parsing
+npm test                 # logic tests: day rollover, streaks, jar layers, bias model, coach steps, calendar parsing, meeting match
 npm run typecheck
 npm run build && npm run build:server
 ```
+
+Quest app packaging (optional, Horizon Store): see `docs/PACKAGING.md`.
 
 The concept brief is generated from `docs/briefs-src/` (`python3 docs/briefs-src/build.py`, needs reportlab).
 
 ## Demo run (video recording)
 
 With `npm run dev` running, `python3 scripts/demo_run.py` drives the emulator with
-emulated hands through the whole day: brain dump, sorting, agent split, overflow and
-nudge, focus, flick to tomorrow, jar, wind-down. `--pace 1.5` slows it down.
+emulated hands through the whole day: first-visit greeting and sample day, brain dump,
+sorting, agent split, overflow and nudge, handing a task to the buddy, focus, flick to
+tomorrow, jar, wind-down. `--pace 1.5` slows it down.
 
 ## Deploy (Google Cloud Run)
 
@@ -69,6 +72,7 @@ src/estimates.ts             estimation-bias model
 src/brain-dump.ts            agent calls with offline fallbacks
 src/companion.ts             desk buddy animation and speech bubble
 src/calendar-client.ts       today's meetings and the sample day
+src/meeting-match.ts         skips brain-dump tasks that are already meetings
 server/                      production server and Claude endpoints
 scripts/demo_run.py          scripted emulator demo for the video
 ```

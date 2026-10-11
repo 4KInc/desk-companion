@@ -26,13 +26,34 @@ World.create(
     connect: (source) => planner?.connectCalendar(source) ?? Promise.reject(new Error('Not ready yet')),
     disconnect: () => planner?.disconnectCalendar(),
     connected: () => planner?.calendarState() ?? { url: '', sample: false },
+    onChange: (listener) => planner?.setCalendarListener(listener),
   }, {
     list: () => planner?.draftsList() ?? [],
     onChange: (listener) => planner?.setDraftListener(listener),
   });
+  // Browser view (before XR): look down at the desk from a seated eye, framed to the right
+  // of the 2D card so the buddy and its first greeting are never hidden behind it.
+  const frameDesk = () => {
+    world.camera.position.set(-0.18, 1.5, 0.62);
+    world.camera.lookAt(-0.18, 0.74, -0.4);
+  };
+  frameDesk();
   world.visibilityState.subscribe((visibility) => {
     overlay.hidden = visibility !== VisibilityState.NonImmersive;
+    if (visibility === VisibilityState.NonImmersive) frameDesk();
   });
+  // Installed Quest app (Trusted Web Activity): there is no page to click, so the launch tap
+  // starts the AR session. getDigitalGoodsService exists only in the installed app, so browser
+  // tabs keep their Enter XR button.
+  const nav = navigator as Navigator & { xr?: { isSessionSupported?: (mode: string) => Promise<boolean> } };
+  if ('getDigitalGoodsService' in window && nav.xr?.isSessionSupported) {
+    nav.xr
+      .isSessionSupported('immersive-ar')
+      .then((supported) => {
+        if (supported) world.launchXR();
+      })
+      .catch(() => {});
+  }
   if (import.meta.env.DEV) {
     // Alt+Shift+R: start over as a brand-new user (first-run testing, demo recording).
     window.addEventListener('keydown', (event) => {

@@ -63,6 +63,8 @@ export interface PlannerState {
   focusTaskId: number;
   /** First-run coach progress. Users who already had data skip it. */
   onboarding: { lineSeen: boolean; done: boolean };
+  /** The one-time welcome (buddy greeting plus the sample day) has run. */
+  welcomed: boolean;
   /** First drafts the agent wrote for tasks; the 20 most recent. */
   drafts: StoredDraft[];
   /** Calendar link (kept only on this device) or the built-in sample day. */
@@ -89,6 +91,7 @@ export function emptyState(day = planDay()): PlannerState {
     completions: [],
     focusTaskId: 0,
     onboarding: { lineSeen: false, done: false },
+    welcomed: false,
     settings: { largeTiles: false, highContrast: false, reduceMotion: false, sound: true },
     calendar: { url: '', sample: false },
     drafts: [],
@@ -207,6 +210,8 @@ export async function loadState(): Promise<PlannerState> {
       const experienced = (saved.tasks?.length ?? 0) > 0 || (saved.jar?.count ?? 0) > 0;
       merged.onboarding = { lineSeen: experienced, done: experienced };
     }
+    // Saved before the welcome existed: those users have already met the app.
+    merged.welcomed = saved.welcomed ?? true;
     return merged;
   } catch (error) {
     console.warn('[DeskCompanion] could not load saved state', error);

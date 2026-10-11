@@ -29,6 +29,8 @@ BRAIN_DUMP = (
 # (match public/scenes/main.iwsdk.scene.json: desk-setup child at (0, 0.26, -0.23), -15 deg, 0.11).
 ZONES = {"now": (-0.19, 0.07), "later": (0.0, 0.07), "drop": (0.19, 0.07)}
 JAR = (0.37, 0.04)
+BUDDY = (-0.38, 0.03)  # desk-buddy in public/scenes/main.iwsdk.scene.json
+DELEGATE = "Reply to the recruiter"
 PANEL = {"y": 0.26, "z": -0.23, "tilt": math.radians(-15), "scale": 0.11}
 SEATED_HEAD = {"x": 0.05, "y": 0.95, "z": 0.12}
 PACE = 1.0
@@ -58,7 +60,7 @@ def report():
     """Prints what the panel says after a beat, so a recording run can be checked."""
     status = panel_layout("status-text")
     capacity = panel_layout("capacity-text")
-    cards = [c for c in ("nudge-card", "split-card", "took-card", "recap-card", "tile-actions") if shown(c)]
+    cards = [c for c in ("nudge-card", "split-card", "took-card", "recap-card", "draft-card", "tile-actions") if shown(c)]
     print(f"   status: {status and status.get('text')}")
     print(f"   {capacity and capacity.get('text')} | cards: {', '.join(cards) or 'none'}")
 
@@ -191,15 +193,24 @@ def main():
     PACE, ROOT = args.pace, args.root
 
     if not args.keep:
-        say("Fresh start (dev-only reset), then the brain dump on the 2D page")
+        say("Fresh start (dev-only reset): the buddy says hello and a sample day fills Now with meetings")
         cli("browser", "interact", payload={"steps": [{"action": "press", "key": "Alt+Shift+KeyR"}]})
         time.sleep(4)
         cli("runtime", "wait", payload={"timeoutMs": 20000})
+        pause(8)  # the greeting, then the meetings
+        say("Brain dump on the 2D page; '1:1 with Alex' is already a meeting, so it is skipped")
         cli("browser", "interact", payload={"steps": [
-            {"action": "fill", "locator": {"role": "textbox"}, "value": BRAIN_DUMP},
+            {"action": "click", "locator": {"role": "button", "name": "Use an example"}},
+            {"action": "wait", "durationMs": 1500},
             {"action": "click", "locator": {"role": "button", "name": "Make tiles"}},
-            {"action": "wait", "durationMs": 10000},
         ]})
+        for _ in range(30):  # the agent takes a few seconds; wait until the tiles are in
+            status = panel_layout("status-text")
+            if status and "Sorting" not in status.get("text", ""):
+                break
+            time.sleep(1)
+        pause(3)
+        report()
 
     say("Enter XR seated at the desk, hands only")
     cli("xr", "enter", payload={})
@@ -246,6 +257,19 @@ def main():
         report()
     if shown("split-card"):  # a big tile stacked during the overflow: keep it whole this time
         tap("split-dismiss", card_id="split-card")
+
+    say("Hand a task to the buddy: it types, then a first draft lands on the desk")
+    current = tiles()
+    grabbable = DELEGATE in current and current[DELEGATE][2]
+    title = DELEGATE if grabbable else first_tile("later") or first_tile("inbox") or first_tile("now")
+    if title:
+        pose = desk_pose()
+        carry(title, desk_to_world((BUDDY[0], 0.09, BUDDY[1]), pose), duration=1.2)
+        pause(12)  # the agent writes; the buddy types
+        report()
+        if shown("draft-card"):
+            pause(4)  # read the draft
+            tap("draft-close", card_id="draft-card")
 
     say("Focus: pull a tile to your chest")
     title = first_tile("now")

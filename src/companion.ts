@@ -35,6 +35,7 @@ export class Companion {
   private readonly local = new Vector3();
   private readonly head = new Vector3();
   private mode: CompanionMode = 'idle';
+  private ready = false;
   private reduceMotion = false;
   private clock = 0;
   private nextBlink = 2;
@@ -67,6 +68,11 @@ export class Companion {
   setMode(mode: CompanionMode): void {
     this.mode = mode;
     if (this.notebook) this.notebook.visible = mode === 'working';
+  }
+
+  /** Hands up, ready to take a tile: shown while one is carried over the buddy. */
+  setReady(on: boolean): void {
+    this.ready = on;
   }
 
   setReduceMotion(on: boolean): void {
@@ -117,7 +123,7 @@ export class Companion {
     if (this.face) this.face.position.y += ((working ? -0.004 : 0) - this.face.position.y) * Math.min(1, delta * 4);
     this.hands.forEach((hand, i) => {
       const typing = working && motion ? Math.max(0, Math.sin(this.clock * 14 + i * Math.PI)) * 0.006 : 0;
-      const target = this.handRestY[i] - (working ? 0.012 : 0) + typing;
+      const target = this.handRestY[i] - (working ? 0.012 : 0) + typing + (this.ready ? 0.016 : 0);
       hand.position.y += (target - hand.position.y) * Math.min(1, delta * 12);
     });
 

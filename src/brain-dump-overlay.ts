@@ -7,7 +7,13 @@ export interface CalendarActions {
   connect(source: string): Promise<string>;
   disconnect(): void;
   connected(): { url: string; sample: boolean };
+  /** Called when the app changes the connection itself (the first-visit sample day). */
+  onChange?(listener: () => void): void;
 }
+
+/** A realistic morning, so a first-time visitor can try the agent without typing. */
+const EXAMPLE_DUMP =
+  "Finish the Q4 roadmap doc, review Sam's pull request before noon, 1:1 with Alex, prep slides for Thursday's demo, reply to the recruiter, book flights to Berlin, maybe tidy up the backlog";
 
 export interface DraftView {
   id: number;
@@ -41,7 +47,11 @@ export function mountBrainDumpOverlay(
     <button id="brain-dump-submit" type="submit"
       style="border:0;border-radius:999px;padding:10px;background:#1f2328;color:#fff;font:600 14px system-ui,sans-serif;cursor:pointer">
       Make tiles</button>
-    <span id="brain-dump-hint" style="color:#5b616b;font-size:12px">The agent splits and estimates it. Works offline too.</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="brain-dump-hint" style="flex:1;color:#5b616b;font-size:12px">The agent splits and estimates it. Works offline too.</span>
+      <button id="brain-dump-example" type="button"
+        style="border:1px solid #5b6576;border-radius:999px;padding:6px 10px;background:#fff;color:#5b6576;font:600 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap">Use an example</button>
+    </div>
     <div style="border-top:1px solid #e1e5ea;margin-top:4px;padding-top:8px;display:flex;flex-direction:column;gap:6px">
       <strong style="font-size:15px">Today's meetings</strong>
       <input id="calendar-url" type="url" placeholder="Private iCal link (Google, Outlook, iCloud...)"
@@ -61,6 +71,11 @@ export function mountBrainDumpOverlay(
   const text = card.querySelector<HTMLTextAreaElement>('#brain-dump-text')!;
   const submit = card.querySelector<HTMLButtonElement>('#brain-dump-submit')!;
   const hint = card.querySelector<HTMLSpanElement>('#brain-dump-hint')!;
+  card.querySelector<HTMLButtonElement>('#brain-dump-example')!.addEventListener('click', () => {
+    text.value = EXAMPLE_DUMP;
+    text.focus();
+    hint.textContent = 'An example morning. Edit it, or tap Make tiles.';
+  });
   card.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!text.value.trim()) return;
@@ -123,6 +138,12 @@ function wireCalendar(card: HTMLElement, calendar: CalendarActions): void {
   });
   sample.addEventListener('click', () => void run('sample', sample));
   // Saved state loads asynchronously; reflect it once it is there.
+  calendar.onChange?.(() => {
+    showConnected();
+    if (calendar.connected().sample) {
+      status.textContent = 'Showing a sample day. Paste your own iCal link and Connect to replace it.';
+    }
+  });
   setTimeout(showConnected, 1500);
 }
 

@@ -40,14 +40,14 @@ final build before submitting on 17 Nov.
 - **Pinch-grab** a tile (the nearest tile lifts 1.5 cm and glows as your hand approaches, so the pinch never fights the desk). Only the top of each pile is grabbable.
 - **Drop** it over Now, Later, Drop, the Inbox or the done jar; it snaps and restacks.
 - **Flick** a held tile left to push it to tomorrow; **pull it to your chest** to focus. Both have buttons on the panel too, and destructive actions offer Undo for 8 seconds.
-- **Hand a tile to the buddy**: carry it onto the desk buddy and let go to delegate it; the agent's draft comes back as a sheet on the desk (Draft button as fallback).
+- **Hand a tile to the buddy**: carry it over the desk buddy (it raises its hands and the panel says "Let go") and release to delegate it; the agent's draft comes back as a sheet on the desk (Draft button as fallback).
 - **Ray-pinch** panel buttons; **point and pinch** at any surface to place the tray.
 
 ## Testing instructions for judges
 
 1. On Meta Quest 3 or 3S, open the link in the Quest Browser while seated at a desk or table.
 2. Tap Enter XR and allow the requested permissions. If Space Setup labelled your table, the tray appears on it; otherwise point at your desk and pinch, or use Move tray later.
-3. Type a brain dump in the box on the page before entering, or use the time buttons in XR (Dictate appears where the browser supports speech). Tap **Try a sample day** on the page to see meetings on the desk without connecting a calendar.
+3. On a first visit the desk buddy says hello and a sample day fills Now with meetings, so nothing needs connecting. Type a brain dump in the box on the page (or tap **Use an example**) before entering, or use the time buttons in XR (Dictate appears where the browser supports speech). Anything already on the calendar is skipped, so meetings are never counted twice.
 4. Follow the one-line hints on the panel: they walk through the first run.
 
 ## Privacy

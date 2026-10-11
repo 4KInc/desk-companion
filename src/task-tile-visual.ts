@@ -51,6 +51,32 @@ function sideColor(minutes: number, contrast: boolean): number {
   return 0xef7a5a;
 }
 
+
+/** Word-wraps a title into at most two lines, ending the second with "..." if it is cut. */
+function titleLines(ctx: CanvasRenderingContext2D, title: string, width: number): string[] {
+  const fits = (text: string) => ctx.measureText(text).width <= width;
+  const words = title.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (fits(next) || !line) {
+      line = next;
+      continue;
+    }
+    lines.push(line);
+    line = word;
+    if (lines.length === 2) break;
+  }
+  if (lines.length < 2 && line) lines.push(line);
+  const used = lines.join(' ').split(/\s+/).length;
+  if (used < words.length || !fits(lines[lines.length - 1] ?? '')) {
+    let last = lines[lines.length - 1] ?? '';
+    while (!fits(`${last}...`) && last.length > 1) last = last.slice(0, -1);
+    lines[lines.length - 1] = `${last.trimEnd()}...`;
+  }
+  return lines.length ? lines : [''];
+}
 function drawLabel(
   title: string,
   minutes: number,
@@ -68,16 +94,20 @@ function drawLabel(
   ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
   ctx.fillRect(0, 0, canvas.width, 16);
   ctx.fillStyle = contrast ? '#000000' : '#1f2328';
-  ctx.font = contrast ? '800 48px system-ui, sans-serif' : '600 44px system-ui, sans-serif';
+  ctx.font = contrast ? '800 40px system-ui, sans-serif' : '600 38px system-ui, sans-serif';
   ctx.textBaseline = 'top';
-  let text = title;
-  while (ctx.measureText(text).width > canvas.width - 32 && text.length > 4) {
-    text = `${text.slice(0, -2)}.`;
-  }
-  ctx.fillText(text, 16, 48);
+  // Two lines of title, so "Sprint planning" or "Reply to the recruiter" read whole at arm's length.
+  titleLines(ctx, title, canvas.width - 32).forEach((line, i) => ctx.fillText(line, 16, 28 + i * 44));
   ctx.fillStyle = contrast ? '#000000' : '#5b616b';
-  ctx.font = contrast ? '800 56px system-ui, sans-serif' : '500 52px system-ui, sans-serif';
-  ctx.fillText(meetingTime ?? formatMinutes(minutes), 16, 128);
+  // A time range has to fit beside the calendar mark: shrink it until it does.
+  const detail = meetingTime ?? formatMinutes(minutes);
+  const room = meetingTime ? canvas.width - 96 : canvas.width - 32;
+  let size = contrast ? 52 : 48;
+  do {
+    ctx.font = `${contrast ? 800 : 500} ${size}px system-ui, sans-serif`;
+    size -= 2;
+  } while (ctx.measureText(detail).width > room && size > 28);
+  ctx.fillText(detail, 16, 136);
   if (meetingTime) {
     // A small calendar mark: meetings come from the calendar and cannot be moved.
     const x = canvas.width - 72;
