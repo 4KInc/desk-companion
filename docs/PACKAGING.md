@@ -4,6 +4,14 @@ Optional: the competition only needs the URL. The APK is a thin wrapper (a Trust
 Web Activity) around the live site, so web fixes ship by `npm run deploy`, never by
 rebuilding the APK.
 
+**Status (16 Oct 2026):** built and signed. `twa/app-release-signed.apk` (package
+`com.fourkinc.deskcompanion`, immersive, Quest) and the live asset links verify with
+Google's checker. The signing key and its password are in `~/.desk-companion-signing/`
+(outside the repo): **back that folder up**. Losing it means the app can never be updated.
+The toolchain is in `~/.bubblewrap` and bubblewrap itself in
+`~/.local/share/bubblewrap-cli/node_modules/.bin/bubblewrap`. Remaining: create the app
+in the Horizon developer dashboard, set `applicationId`, rebuild (step 3) and upload (step 5).
+
 Already done in the repo:
 
 - `public/manifest.webmanifest` and `public/icons/*` (regenerate with `node scripts/icons.mjs`)

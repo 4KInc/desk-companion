@@ -55,3 +55,7 @@ twa/app/
 twa/gradle*
 twa/build/
 twa/.gradle/
+twa/*.idsig
+twa/*.gradle
+twa/manifest-checksum.txt
+twa/store_icon.png
