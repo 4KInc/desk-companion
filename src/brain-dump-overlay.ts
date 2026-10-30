@@ -1,3 +1,5 @@
+import { EXAMPLE_DUMP } from './example-day.js';
+
 /**
  * 2D-page brain dump box. On Quest this is typed with the system keyboard in the
  * browser before entering XR; on desktop it is the fastest way to add tasks.
@@ -11,9 +13,6 @@ export interface CalendarActions {
   onChange?(listener: () => void): void;
 }
 
-/** A realistic morning, so a first-time visitor can try the agent without typing. */
-const EXAMPLE_DUMP =
-  "Finish the Q4 roadmap doc, review Sam's pull request before noon, 1:1 with Alex, prep slides for Thursday's demo, reply to the recruiter, book flights to Berlin, maybe tidy up the backlog";
 
 export interface DraftView {
   id: number;

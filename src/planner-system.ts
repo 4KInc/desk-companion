@@ -23,6 +23,7 @@ import {
 import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
+import { EXAMPLE_DUMP } from './example-day.js';
 import { matchingMeeting } from './meeting-match.js';
 import { CoachVisuals } from './coach.js';
 import { adjustEstimate, biasByCategory, biasLine, MIN_SAMPLES, type Category } from './estimates.js';
@@ -94,6 +95,9 @@ const FOCUS_LINES = [
 const CHECK_IN_MINUTES = 25;
 /** Releasing a tile this close to the buddy hands it to the agent for a first draft. */
 const BUDDY_CATCH_RADIUS = 0.12;
+/** How often the next-meeting line refreshes, and how early the buddy gives a heads-up. */
+const NEXT_MEETING_CHECK_SECONDS = 15;
+const HEADS_UP_MINUTES = 5;
 const MAX_DRAFTS = 20;
 /** Lines the panel's draft reader shows; the full draft is on the 2D page. */
 const DRAFT_LINES = 8;
@@ -210,6 +214,12 @@ export class PlannerSystem extends createSystem({
   private readonly buddyWorld = new Vector3();
   private focusSessionMs = 0;
   private coachCard?: UIKit.Container;
+  private coachExample?: UIKit.Container;
+  private nextText?: TextElement;
+  private nextShown = '';
+  private nextCheck = 0;
+  /** Meetings already announced, by title and start, so a calendar re-sync does not repeat them. */
+  private readonly headsUp = new Set<string>();
   private coachText?: TextElement;
   private coachNow: CoachStep = 'off';
   private coachTimer = 0;
@@ -389,6 +399,8 @@ export class PlannerSystem extends createSystem({
     this.capacityText = panel.getElementById('capacity-text') as TextElement;
     this.coachCard = panel.getElementById('coach-card') as UIKit.Container | undefined;
     this.coachText = panel.getElementById('coach-text') as TextElement | undefined;
+    this.coachExample = panel.getElementById('coach-example') as UIKit.Container | undefined;
+    this.nextText = panel.getElementById('next-text') as TextElement | undefined;
     this.statusText = panel.getElementById('status-text') as TextElement;
     this.jarText = panel.getElementById('jar-text') as TextElement;
     const on = (id: string, handler: () => void) => {
@@ -405,6 +417,7 @@ export class PlannerSystem extends createSystem({
     };
     on('hours-down', () => this.changeCapacity(-1));
     on('hours-up', () => this.changeCapacity(1));
+    on('coach-example', () => void this.addBrainDump(EXAMPLE_DUMP));
     on('add-15', () => this.addTask(15));
     on('add-30', () => this.addTask(30));
     on('add-60', () => this.addTask(60));
@@ -567,6 +580,8 @@ export class PlannerSystem extends createSystem({
         ? 'Type what is on your mind in the box below, or click a time to add a task'
         : coachHint(step, this.state.capacityHours, this.canDictate);
     this.coachCard?.setProperties({ display: step === 'off' ? 'none' : 'flex' });
+    // Inside the headset there is no keyboard: one pinch shows the agent at work on a real morning.
+    this.coachExample?.setProperties({ display: step === 'add' ? 'flex' : 'none' });
     if (hint) this.setText(this.coachText, hint);
   }
 
@@ -1127,6 +1142,7 @@ export class PlannerSystem extends createSystem({
   private applySettings(): void {
     const { largeTiles, highContrast, reduceMotion, sound } = this.state.settings;
     this.sounds.muted = !sound;
+    this.companion?.setVoice(sound);
     this.coach?.setReduceMotion(reduceMotion);
     this.companion?.setReduceMotion(reduceMotion);
     const onOff = (on: boolean) => (on ? 'On' : 'Off');
@@ -1324,6 +1340,7 @@ export class PlannerSystem extends createSystem({
     if (!this.bound || (!url && !sample)) return 'No calendar connected';
     const meetings = sample ? sampleMeetings(this.state.day) : await fetchMeetings(url, this.state.day);
     this.replaceMeetings(meetings);
+    this.nextCheck = 0; // show the next meeting right away
     const total = meetings.reduce((sum, m) => sum + Math.round((m.end - m.start) / 60000), 0);
     const free = Math.max(0, this.state.capacityHours * 60 - total);
     this.companion?.say(
@@ -1341,6 +1358,36 @@ export class PlannerSystem extends createSystem({
         : `${sample ? 'Sample day: ' : ''}${meetings.length} meetings, ${formatMinutes(total)}. They sit at the bottom of Now`;
     this.setStatus(message);
     return message;
+  }
+
+  /** "Next: Design review at 11:00 (in 25m)" on the panel, and a heads-up from the buddy. */
+  private refreshNextMeeting(): void {
+    const now = Date.now();
+    let current: StoredTask | undefined;
+    let next: StoredTask | undefined;
+    for (const task of this.state.tasks) {
+      if (task.kind !== 'meeting' || !task.startMs || !task.endMs) continue;
+      if (task.startMs <= now && task.endMs > now) current = task;
+      else if (task.startMs > now && (!next || task.startMs < (next.startMs ?? 0))) next = task;
+    }
+    const text = current
+      ? `In a meeting: ${current.title}, until ${clockTime(current.endMs!)}`
+      : next
+        ? `Next: ${next.title} at ${clockTime(next.startMs!)} (in ${formatMinutes(Math.ceil((next.startMs! - now) / 60000))})`
+        : '';
+    if (text !== this.nextShown) {
+      this.nextShown = text;
+      this.nextText?.setProperties({ display: text ? 'flex' : 'none' });
+      if (text) this.setText(this.nextText, text);
+    }
+    if (!next || current) return;
+    const minutes = Math.ceil((next.startMs! - now) / 60000);
+    const key = `${next.title}@${next.startMs}`;
+    if (minutes <= HEADS_UP_MINUTES && !this.headsUp.has(key)) {
+      this.headsUp.add(key);
+      this.companion?.say(`${next.title} in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}. A good moment to wrap up.`, 10);
+      if (this.buddyNode) this.sounds.play('focusStop', this.buddyNode.getWorldPosition(this.soundAt));
+    }
   }
 
   private replaceMeetings(meetings: DayMeeting[]): void {
@@ -1865,6 +1912,11 @@ export class PlannerSystem extends createSystem({
     this.updateHover();
     this.sounds.updateListener(this.player.head);
     this.tickCoach(delta);
+    this.nextCheck -= delta;
+    if (this.nextCheck <= 0) {
+      this.nextCheck = NEXT_MEETING_CHECK_SECONDS;
+      this.refreshNextMeeting();
+    }
     // In the browser the rendered camera is not the XR head: face whichever one is drawing.
     const viewer = this.world.visibilityState.peek() === VisibilityState.NonImmersive ? this.world.camera : this.player.head;
     this.companion?.update(delta, viewer);

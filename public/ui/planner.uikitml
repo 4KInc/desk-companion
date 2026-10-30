@@ -114,6 +114,8 @@
   }
 
   .coach {
+    flex-direction: column;
+    gap: 8px;
     padding-top: 8px;
     padding-bottom: 8px;
     padding-left: 12px;
@@ -257,8 +259,10 @@
   </div>
   <div id="coach-card" class="coach" style="display: none">
     <div id="coach-text" class="coach-text">Start with your day</div>
+    <Button id="coach-example" class="xr-button" style="display: none"><ButtonLabel>Try an example morning</ButtonLabel></Button>
   </div>
   <div id="capacity-text" class="capacity">Now 0h / 5h</div>
+  <div id="next-text" class="label" style="display: none">Next: </div>
   <Divider></Divider>
   <div id="add-label" class="label">Add task</div>
   <div id="add-row" class="row">

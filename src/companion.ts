@@ -36,6 +36,7 @@ export class Companion {
   private readonly head = new Vector3();
   private mode: CompanionMode = 'idle';
   private ready = false;
+  private voice = true;
   private reduceMotion = false;
   private clock = 0;
   private nextBlink = 2;
@@ -70,6 +71,12 @@ export class Companion {
     if (this.notebook) this.notebook.visible = mode === 'working';
   }
 
+  /** Read lines aloud too (follows the Sound option). */
+  setVoice(on: boolean): void {
+    this.voice = on;
+    if (!on) globalThis.speechSynthesis?.cancel();
+  }
+
   /** Hands up, ready to take a tile: shown while one is carried over the buddy. */
   setReady(on: boolean): void {
     this.ready = on;
@@ -101,6 +108,19 @@ export class Companion {
     this.texture.needsUpdate = true;
     this.bubbleTime = seconds;
     this.bubble.visible = true;
+    this.speak(text);
+  }
+
+  /** A small, bright voice through the browser's own speech engine; silently skipped where there is none. */
+  private speak(text: string): void {
+    const synth = globalThis.speechSynthesis;
+    if (!this.voice || !synth || typeof SpeechSynthesisUtterance === 'undefined') return;
+    synth.cancel(); // the newest line wins, as it does in the bubble
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    utterance.pitch = 1.35;
+    utterance.volume = 0.9;
+    synth.speak(utterance);
   }
 
   update(delta: number, headObject: Object3D): void {
