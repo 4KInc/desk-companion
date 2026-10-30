@@ -59,3 +59,6 @@ twa/*.idsig
 twa/*.gradle
 twa/manifest-checksum.txt
 twa/store_icon.png
+
+# Local test screenshots and logs
+artifacts/
