@@ -162,7 +162,7 @@ export async function handleCalendarRequest(request: Request): Promise<Response>
   const to = Number(body.to);
   if (!url) {
     return Response.json(
-      { error: 'Use your calendar\'s private iCal link (Google, Outlook, iCloud, Yahoo, Fastmail or Proton)' },
+      { error: "Use your calendar's private iCal link (.ics). Most calendar apps offer one in their sharing settings" },
       { status: 400 },
     );
   }

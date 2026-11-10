@@ -53,7 +53,7 @@ export function mountBrainDumpOverlay(
     </div>
     <div style="border-top:1px solid #e1e5ea;margin-top:4px;padding-top:8px;display:flex;flex-direction:column;gap:6px">
       <strong style="font-size:15px">Today's meetings</strong>
-      <input id="calendar-url" type="url" placeholder="Private iCal link (Google, Outlook, iCloud...)"
+      <input id="calendar-url" type="url" placeholder="Your calendar's private iCal link (.ics)"
         style="border:1px solid #cfd6df;border-radius:10px;padding:8px;font:inherit" />
       <div style="display:flex;gap:6px">
         <button id="calendar-connect" type="button"
