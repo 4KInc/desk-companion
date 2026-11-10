@@ -22,6 +22,9 @@
           "required": false,
           "usage": "gpu-optimized",
           "format": "float32"
+        },
+        "gazeTracking": {
+          "required": false
         }
       }
     },
@@ -49,6 +52,12 @@
       "environmentRaycast": true,
       "spatialUI": {
         "kit": "horizon"
+      },
+      "gaze": {
+        "coneAngle": 4,
+        "logDiagnostics": false,
+        "suppressWhenDirectPointerActive": true,
+        "pointerTransformFollowsHand": true
       }
     }
   },
