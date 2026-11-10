@@ -29,6 +29,7 @@ import { returnCallback } from './return-callback.js';
 import { markMoment } from './session-metrics.js';
 import { clearAnchorHandle } from './anchor-store.js';
 import { DwellTimer, pickTarget, type DwellCandidate } from './dwell.js';
+import { rotateAbout } from './fov-swing.js';
 import { LookSelectVisual } from './look-select.js';
 import { EXAMPLE_DUMP } from './example-day.js';
 import { matchingMeeting } from './meeting-match.js';
@@ -250,6 +251,7 @@ export class PlannerSystem extends createSystem({
   private readonly lookOrigin = new Vector3();
   private readonly lookForward = new Vector3();
   private readonly lookCursor = new Vector3();
+  private readonly focusLocal = new Vector3();
   private overflowFlash = 0;
   private draftSheetEntity?: Entity;
   private sheetHeld = false;
@@ -967,6 +969,23 @@ export class PlannerSystem extends createSystem({
   }
 
   /** Moves a task to a zone's top (with Undo for Drop and a split offer for big work in Now). Returns the zone's name. */
+  /**
+   * Where a focused tile floats, tray-local: in front of the tray, swung around the user by the
+   * same angle as the panel when the tray sits off to one side, so the timer stays in view.
+   */
+  private focusSpot(): Vector3 {
+    this.focusLocal.set(FOCUS_SPOT.x, FOCUS_SPOT.y, FOCUS_SPOT.z);
+    const desk = this.queries.desk.entities.values().next().value as Entity | undefined;
+    const swing = desk ? (desk.getValue(DeskPlacement, 'swing') as number) : 0;
+    if (!swing) return this.focusLocal;
+    this.tray.updateWorldMatrix(true, false);
+    this.tray.localToWorld(this.focusLocal);
+    this.player.head.getWorldPosition(this.hoverPos);
+    const turned = rotateAbout(this.focusLocal, this.hoverPos, swing);
+    this.focusLocal.set(turned.x, this.focusLocal.y, turned.z);
+    return this.tray.worldToLocal(this.focusLocal);
+  }
+
   private assignZone(task: StoredTask, zone: Zone): string {
     if (zone !== Zone.Inbox) markMoment('firstSortAt');
     const from = { zone: task.zone, order: task.order };
@@ -1733,7 +1752,10 @@ export class PlannerSystem extends createSystem({
       this.applyLayout(task, x, TRAY.surfaceY + columns[column] + h / 2, TRAY.inbox.z, false, topOfColumn);
       columns[column] += h + STACK_GAP;
     });
-    if (focused) this.applyLayout(focused, FOCUS_SPOT.x, FOCUS_SPOT.y, FOCUS_SPOT.z, false, true);
+    if (focused) {
+      const spot = this.focusSpot();
+      this.applyLayout(focused, spot.x, spot.y, spot.z, false, true);
+    }
 
     if (anyOverflow && !this.wasOverflowing) {
       this.soundAt.set(TRAY.zones.Now.x, capacityTop, TRAY.zones.Now.z);

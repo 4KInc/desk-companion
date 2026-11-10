@@ -43,4 +43,9 @@ export const DeskPlacement = createComponent('DeskPlacement', {
   source: { type: Types.String, default: '' },
   /** Set by the Move tray button: place by hand only, never snap back to a detected table. */
   manual: { type: Types.Boolean, default: false },
+  /**
+   * Radians the panel and buddy were swung around the seated user because the tray sits more
+   * than 25 degrees off head-forward (0 when centred). The planner swings the focus spot too.
+   */
+  swing: { type: Types.Float32, default: 0 },
 });

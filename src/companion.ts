@@ -17,7 +17,7 @@ const BUBBLE_H = 0.06;
  * the user, so it stays within about 25 degrees of a seated gaze at the tray instead of out
  * over the buddy at the edge of the view.
  */
-const BUBBLE_OFFSET = { inward: 0.07, up: 0.13, forward: 0.12 } as const;
+const BUBBLE_OFFSET = { inward: 0.09, up: 0.13, forward: 0.1 } as const;
 const CANVAS_W = 512;
 const CANVAS_H = 180;
 /** [font px, line height, max lines], tried in order. */

@@ -1,5 +1,6 @@
 import {
   createSystem,
+  Quaternion,
   EnvironmentRaycastTarget,
   Mesh,
   MeshBasicMaterial,
@@ -13,6 +14,7 @@ import {
 } from '@iwsdk/core';
 import { plausibleDeskPose } from './anchor-store.js';
 import { DeskAnchor } from './desk-anchor.js';
+import { offAxis, rotateAbout, swingFor } from './fov-swing.js';
 import { DeskPlacement, PlacementState } from './planner-components.js';
 
 /** How long to wait for a labelled table before offering tap-to-place. */
@@ -23,6 +25,8 @@ const TRAY_REACH = 0.45;
 const MAX_TABLE_DISTANCE = 1.6;
 /** After a restored anchor resolves, how long it may take to be located before we move on. */
 const ANCHOR_LOCATE_SECONDS = 2;
+/** Scene nodes that swing toward the user when the tray sits off to one side. */
+const SWING_NODES = ['planner-panel', 'desk-buddy'];
 
 /**
  * Moves the authored `desk-setup` group onto the real desk when an XR session
@@ -55,6 +59,12 @@ export class DeskPlacementSystem extends createSystem({
   /** A fresh placement waiting for the next XR frame to be anchored. */
   private pendingAnchor?: { position: { x: number; y: number; z: number }; yaw: number };
   private readonly anchorPosition = new Vector3();
+  /** The tray's yaw, chosen to face the seated user at placement (anchors keep only the position). */
+  private facingYaw = 0;
+  /** The panel and buddy as authored in the scene (desk-local), to swing toward the user. */
+  private swingTargets: { object: Object3D; position: Vector3; quaternion: Quaternion }[] = [];
+  private readonly swingQuat = new Quaternion();
+  private readonly up = new Vector3(0, 1, 0);
 
   init(): void {
     this.cleanupFuncs.push(
@@ -75,6 +85,10 @@ export class DeskPlacementSystem extends createSystem({
     this.deskObject = object;
     this.authoredPosition.copy(object.position);
     this.authoredYaw.value = object.rotation.y;
+    for (const name of SWING_NODES) {
+      const target = this.world.getSceneObject(name);
+      if (target) this.swingTargets.push({ object: target, position: target.position.clone(), quaternion: target.quaternion.clone() });
+    }
     desk.addComponent(DeskPlacement, { state: PlacementState.Authored });
     return true;
   }
@@ -112,6 +126,7 @@ export class DeskPlacementSystem extends createSystem({
     if (this.deskObject) {
       this.deskObject.position.copy(this.authoredPosition);
       this.deskObject.rotation.set(0, this.authoredYaw.value, 0);
+      this.applySwing(0);
       this.setState(PlacementState.Authored);
     }
   }
@@ -173,9 +188,12 @@ export class DeskPlacementSystem extends createSystem({
       if (this.session) void this.deskAnchor.forget(this.session);
       return false;
     }
-    this.applyPose(this.anchorPosition, pose.yaw);
+    // Keep where the tray was, but turn it to face how the user sits today.
+    this.facingYaw = Math.atan2(this.head.x - this.anchorPosition.x, this.head.z - this.anchorPosition.z);
+    this.applyPose(this.anchorPosition, this.facingYaw);
     this.hideReticle();
     this.setState(PlacementState.Placed, 'anchor');
+    this.swingTowardUser();
     return true;
   }
 
@@ -191,8 +209,7 @@ export class DeskPlacementSystem extends createSystem({
     }
     const anchor = this.deskAnchor.anchor;
     if (state !== PlacementState.Placed || !anchor) return;
-    const pose = this.anchorPose(anchor);
-    if (pose) this.applyPose(this.anchorPosition, pose.yaw);
+    if (this.anchorPose(anchor)) this.applyPose(this.anchorPosition, this.facingYaw);
   }
 
   /** Anchor pose in reference space (= world here: the player rig never moves) into anchorPosition. */
@@ -210,6 +227,45 @@ export class DeskPlacementSystem extends createSystem({
     const { position: p, orientation: q } = pose.transform;
     this.anchorPosition.set(p.x, p.y, p.z);
     return { yaw: Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z)) };
+  }
+
+  /**
+   * If the tray landed more than 25 degrees off where the user faces, keep it there but swing
+   * the panel and buddy around the user (same distance, now inside the cone) and turn them to
+   * face the user. Measured against the head's horizontal forward at placement.
+   */
+  private swingTowardUser(): void {
+    const object = this.deskObject!;
+    this.player.head.getWorldPosition(this.head);
+    this.player.head.getWorldDirection(this.forward);
+    this.forward.set(-this.forward.x, 0, -this.forward.z); // the head looks down its -Z
+    if (this.forward.lengthSq() < 1e-6) this.forward.set(0, 0, -1);
+    object.updateMatrixWorld(true);
+    object.getWorldPosition(this.point);
+    this.applySwing(swingFor(offAxis(this.head, this.forward, this.point)));
+  }
+
+  private applySwing(swing: number): void {
+    const object = this.deskObject;
+    if (!object) return;
+    object.updateMatrixWorld(true);
+    this.swingQuat.setFromAxisAngle(this.up, swing);
+    for (const target of this.swingTargets) {
+      if (swing === 0) {
+        target.object.position.copy(target.position);
+        target.object.quaternion.copy(target.quaternion);
+        continue;
+      }
+      this.point.copy(target.position);
+      object.localToWorld(this.point);
+      const turned = rotateAbout(this.point, this.head, swing);
+      this.point.set(turned.x, this.point.y, turned.z);
+      object.worldToLocal(this.point);
+      target.object.position.copy(this.point);
+      // The desk is only ever yawed, so a world yaw is the same yaw in the desk's frame.
+      target.object.quaternion.copy(this.swingQuat).multiply(target.quaternion);
+    }
+    this.desk?.setValue(DeskPlacement, 'swing', swing);
   }
 
   private applyPose(worldPoint: Vector3, yaw: number): void {
@@ -243,12 +299,14 @@ export class DeskPlacementSystem extends createSystem({
 
   private placeAt(worldPoint: Vector3, source: string): void {
     const yaw = Math.atan2(this.head.x - worldPoint.x, this.head.z - worldPoint.z);
+    this.facingYaw = yaw;
     this.applyPose(worldPoint, yaw);
     // Anchor it on the next frame (createAnchor needs one); this replaces any older anchor.
     this.pendingAnchor = { position: { x: worldPoint.x, y: worldPoint.y, z: worldPoint.z }, yaw };
     this.hideReticle();
     this.setState(PlacementState.Placed, source);
     this.desk!.setValue(DeskPlacement, 'manual', false);
+    this.swingTowardUser();
   }
 
   private showReticle(): void {

@@ -28,8 +28,8 @@ BRAIN_DUMP = (
 # Tray-local zone centres (match src/scene-assets/day-tray.scene-asset.ts) and panel transform
 # (match public/scenes/main.iwsdk.scene.json: desk-setup child at (0, 0.26, -0.23), -15 deg, 0.11).
 ZONES = {"now": (-0.19, 0.07), "later": (0.0, 0.07), "drop": (0.19, 0.07)}
-JAR = (0.36, -0.15)
-BUDDY = (-0.36, -0.15)  # desk-buddy in public/scenes/main.iwsdk.scene.json
+JAR = (0.35, -0.2)
+BUDDY = (-0.35, -0.2)  # desk-buddy in public/scenes/main.iwsdk.scene.json
 DELEGATE = "Reply to the recruiter"
 PANEL = {"y": 0.26, "z": -0.23, "tilt": math.radians(-15), "scale": 0.11}
 SEATED_HEAD = {"x": 0.05, "y": 0.95, "z": 0.12}
