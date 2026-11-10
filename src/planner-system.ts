@@ -141,6 +141,10 @@ const OVERFLOW_FLASH_SECONDS = 1.6;
 /** Draft sheets rest this far above whatever they lie on (tray-local metres). */
 const SHEET_LIFT = 0.0015;
 const SHEET_HOME = { x: -0.36, z: -0.03 } as const;
+/** Where Move sheet (the button fallback) puts it: beside the tray, then back home. */
+const SHEET_SPOTS = [SHEET_HOME, { x: -0.4, z: 0.12 }, { x: 0.4, z: 0.1 }] as const;
+const SHEET_HINT_SECONDS = 20;
+const SHEET_HINT = 'Pinch the draft sheet to pick it up, then set it down anywhere. Or pinch Move sheet';
 const LOOK_ZONE_IDS = { now: 'zone:now', later: 'zone:later', drop: 'zone:drop', inbox: 'zone:inbox' } as const;
 
 const OPTION_NAMES = {
@@ -255,6 +259,9 @@ export class PlannerSystem extends createSystem({
   private overflowFlash = 0;
   private draftSheetEntity?: Entity;
   private sheetHeld = false;
+  private sheetSpot = 0;
+  /** The one-time "you can move the sheet" hint is showing for this many more seconds. */
+  private sheetHintTimer = 0;
   /** Where the draft sheet lies, tray-local: it stays wherever it was last put down. */
   private readonly sheetLocal = new Vector3(SHEET_HOME.x, SHEET_LIFT, SHEET_HOME.z);
   private readonly sheetFlat = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2);
@@ -502,6 +509,7 @@ export class PlannerSystem extends createSystem({
     on('opt-motion', () => this.changeSetting('reduceMotion'));
     on('opt-sound', () => this.changeSetting('sound'));
     on('opt-look', () => this.changeSetting('lookToSelect'));
+    on('draft-move', () => this.moveSheetByButton());
     this.tileActions = panel.getElementById('tile-actions') as UIKit.Container | undefined;
     this.tileActionsText = panel.getElementById('tile-actions-text') as TextElement | undefined;
     this.actionSplit = panel.getElementById('action-split') as UIKit.Component | undefined;
@@ -626,6 +634,12 @@ export class PlannerSystem extends createSystem({
       }
     }
     this.coach.show(step, this.capacityTop, ghostFrom);
+    if (this.sheetHintTimer > 0) {
+      this.coachCard?.setProperties({ display: 'flex' });
+      this.coachExample?.setProperties({ display: 'none' });
+      this.setText(this.coachText, SHEET_HINT);
+      return;
+    }
     const inBrowser = this.world.visibilityState.peek() === VisibilityState.NonImmersive;
     const hint =
       step === 'add' && inBrowser
@@ -639,6 +653,10 @@ export class PlannerSystem extends createSystem({
 
   private tickCoach(delta: number): void {
     this.coach?.update(delta);
+    if (this.sheetHintTimer > 0) {
+      this.sheetHintTimer -= delta;
+      if (this.sheetHintTimer <= 0) this.endSheetHint();
+    }
     if (this.coachTimer <= 0) return;
     this.coachTimer -= delta;
     if (this.coachTimer > 0) return;
@@ -1336,7 +1354,13 @@ export class PlannerSystem extends createSystem({
       this.showDraft(stored);
       this.placeDraftSheet(stored);
       this.sounds.play('pop');
-      this.companion?.say(source === 'agent' ? `Draft ready: ${stored.title}. It's on the panel.` : LOCAL_FALLBACK_LINE);
+      this.companion?.say(
+        source !== 'agent'
+          ? LOCAL_FALLBACK_LINE
+          : this.sheetHintTimer >= SHEET_HINT_SECONDS - 0.01 // the first sheet ever: teach moving it
+            ? 'Draft ready. Pinch the sheet on the desk to pick it up and put it anywhere.'
+            : `Draft ready: ${stored.title}. It's on the panel.`,
+      );
       this.setStatus(`${source === 'agent' ? 'Agent drafted' : 'Offline head start for'} "${task.title}"`);
       this.draftListener?.([...this.state.drafts]);
       this.scheduleSave();
@@ -1403,6 +1427,7 @@ export class PlannerSystem extends createSystem({
     for (let i = 0; i < 6; i++) ctx.fillRect(14, 186 + i * 20, 228 - (i % 3) * 40, 6); // text lines
     ((this.draftSheet.material as MeshBasicMaterial).map as CanvasTexture).needsUpdate = true;
     this.draftSheet.visible = true;
+    this.startSheetHint();
   }
 
   draftsList(): StoredDraft[] {
@@ -2169,11 +2194,43 @@ export class PlannerSystem extends createSystem({
       if (farAway) this.sheetLocal.set(SHEET_HOME.x, SHEET_LIFT, SHEET_HOME.z);
       else this.sheetLocal.set(this.local3.x, (onTray ? TRAY.surfaceY : 0) + SHEET_LIFT, this.local3.z);
       this.sounds.play('snap', this.world3.copy(object.position));
+      this.endSheetHint();
     }
     this.world3.copy(this.sheetLocal);
     this.tray.localToWorld(this.world3);
     object.position.copy(this.world3);
     object.quaternion.copy(this.trayQuat).multiply(this.sheetFlat);
+  }
+
+  /** The first draft sheet ever: the coach's ghost and pinch show it can be picked up and placed. */
+  private startSheetHint(): void {
+    if (this.state.onboarding.sheetHintDone) return;
+    this.state.onboarding.sheetHintDone = true;
+    this.scheduleSave();
+    this.sheetHintTimer = SHEET_HINT_SECONDS;
+    this.coach?.showSheet(
+      { x: this.sheetLocal.x, y: this.sheetLocal.y + 0.006, z: this.sheetLocal.z },
+      { x: this.sheetLocal.x, y: this.sheetLocal.y + 0.006, z: this.sheetLocal.z + 0.15 },
+    );
+    this.refreshCoach();
+  }
+
+  private endSheetHint(): void {
+    if (this.sheetHintTimer <= 0) return;
+    this.sheetHintTimer = 0;
+    this.coach?.hideSheet();
+    this.refreshCoach();
+  }
+
+  /** Button fallback for moving the sheet by hand: steps it between a few spots by the tray. */
+  private moveSheetByButton(): void {
+    if (!this.draftSheet?.visible) return;
+    this.sheetSpot = (this.sheetSpot + 1) % SHEET_SPOTS.length;
+    const spot = SHEET_SPOTS[this.sheetSpot];
+    this.sheetLocal.set(spot.x, SHEET_LIFT, spot.z);
+    this.sounds.play('snap');
+    this.setStatus('Draft sheet moved');
+    this.endSheetHint();
   }
 
   /** Whether a released tile at `point` would land with the buddy. */

@@ -64,6 +64,7 @@ export class CoachVisuals {
   private readonly ghost: Mesh;
   private readonly ghostMaterial: MeshBasicMaterial;
   private readonly pinchMaterial: SpriteMaterial;
+  private sheetDemo = false;
   private readonly ring: Mesh;
   private readonly ringMaterial: MeshBasicMaterial;
   private readonly from = new Vector3();
@@ -108,10 +109,32 @@ export class CoachVisuals {
     this.reduceMotion = on;
   }
 
+  /**
+   * A one-time demo outside the first-run steps: the ghost (with its pinch) lifts off the draft
+   * sheet and sets down nearby, showing that the sheet can be picked up and placed.
+   */
+  showSheet(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }): void {
+    this.sheetDemo = true;
+    this.clock = 0;
+    this.from.set(from.x, from.y, from.z);
+    this.to.set(to.x, to.y, to.z);
+    if (this.ghost.parent !== this.tray) this.tray.add(this.ghost);
+    this.ghost.visible = !this.reduceMotion;
+  }
+
+  hideSheet(): void {
+    this.sheetDemo = false;
+    this.ghost.visible = false;
+  }
+
   /** `ghostFrom` is the tray-local position of the tile to demonstrate with (sort step). */
   show(step: CoachStep, capacityY: number, ghostFrom?: { x: number; y: number; z: number }): void {
     if (step !== this.step) this.clock = 0;
     this.step = step;
+    if (this.sheetDemo) {
+      this.ring.visible = false;
+      return; // the sheet demo owns the ghost until it ends
+    }
     this.ghost.visible = step === 'sort' && ghostFrom !== undefined && !this.reduceMotion;
     this.ring.visible = step === 'sort' || step === 'line' || step === 'jar';
     if (this.ghost.visible && ghostFrom) {

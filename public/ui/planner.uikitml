@@ -243,7 +243,10 @@
       <div id="draft-line-7" class="draft-body" style="display: none">-</div>
     </div>
     <div id="draft-next" class="jar">Next:</div>
-    <Button id="draft-close" class="xr-button"><ButtonLabel>Done reading</ButtonLabel></Button>
+    <div id="draft-buttons" class="row">
+      <Button id="draft-move" class="xr-button"><ButtonLabel>Move sheet</ButtonLabel></Button>
+      <Button id="draft-close" class="xr-button"><ButtonLabel>Done reading</ButtonLabel></Button>
+    </div>
   </div>
   <div id="options-card" class="options" style="display: none">
     <div class="label">Options</div>
