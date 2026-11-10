@@ -4,6 +4,7 @@ import { mountBrainDumpOverlay } from './brain-dump-overlay.js';
 import { DeskPlacementSystem } from './desk-placement-system.js';
 import { PlannerSystem } from './planner-system.js';
 import { PlaytestSystem, playtestEnabled } from './playtest-system.js';
+import { startSessionMetrics } from './session-metrics.js';
 
 // The done jar "never resets": ask the browser not to evict saved state under storage
 // pressure. Denial is fine; the app still works, it just has no eviction guarantee.
@@ -38,9 +39,24 @@ World.create(
     world.camera.lookAt(-0.18, 0.74, -0.4);
   };
   frameDesk();
+  let inXR = false;
   world.visibilityState.subscribe((visibility) => {
     overlay.hidden = visibility !== VisibilityState.NonImmersive;
-    if (visibility === VisibilityState.NonImmersive) frameDesk();
+    if (visibility === VisibilityState.NonImmersive) {
+      inXR = false;
+      frameDesk();
+      return;
+    }
+    if (inXR) return; // Visible <-> VisibleBlurred (system menu) is the same session
+    inXR = true;
+    startSessionMetrics();
+    // 72 Hz gives the most frame time per frame on Quest; asked for only where the browser allows it.
+    const session = world.renderer.xr.getSession() as
+      | (XRSession & { supportedFrameRates?: Float32Array; updateTargetFrameRate?: (rate: number) => Promise<void> })
+      | null;
+    if (session?.supportedFrameRates?.includes(72) && session.updateTargetFrameRate) {
+      session.updateTargetFrameRate(72).catch(() => undefined);
+    }
   });
   // Installed Quest app (Trusted Web Activity): there is no page to click, so the launch tap
   // starts the AR session. getDigitalGoodsService exists only in the installed app, so browser
@@ -58,6 +74,8 @@ World.create(
     // Alt+Shift+R: start over as a brand-new user (first-run testing, demo recording).
     window.addEventListener('keydown', (event) => {
       if (event.altKey && event.shiftKey && event.code === 'KeyR') void planner?.resetForDemo();
+      // Alt+Shift+S: the worst-case state for profiling.
+      if (event.altKey && event.shiftKey && event.code === 'KeyS') void planner?.seedStress();
     });
   }
 });

@@ -47,6 +47,8 @@ const DIAG_FIELDS: Record<string, 'string' | 'number' | 'boolean'> = {
   session: 'string', sample: 'number', ua: 'string', immersive: 'boolean', fps: 'number',
   worstFrameMs: 'number', tiles: 'number', planes: 'number', placement: 'string',
   placementSource: 'string', hands: 'number', depth: 'boolean', speech: 'boolean',
+  device: 'string', frameP50Ms: 'number', frameP95Ms: 'number', anchors: 'boolean', planeLabels: 'boolean',
+  gaze: 'boolean', lookToSelect: 'boolean', msToTrayPlaced: 'number', msToFirstTile: 'number', msToFirstSort: 'number',
 };
 let dailyCount = 0;
 let dailyResetAt = Date.now() + 24 * 60 * 60 * 1000;

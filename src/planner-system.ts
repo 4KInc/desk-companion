@@ -24,6 +24,7 @@ import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { LOCAL_FALLBACK_LINE } from './agent-call.js';
+import { markMoment } from './session-metrics.js';
 import { clearAnchorHandle } from './anchor-store.js';
 import { DwellTimer, pickTarget, type DwellCandidate } from './dwell.js';
 import { LookSelectVisual } from './look-select.js';
@@ -632,6 +633,32 @@ export class PlannerSystem extends createSystem({
     this.refreshCoach();
   }
 
+  /** Dev-only: the worst case for profiling (25 tiles, 8 weeks of jar layers), saved, then reloaded. */
+  async seedStress(): Promise<void> {
+    const state = emptyState();
+    state.welcomed = true;
+    state.onboarding = { lineSeen: true, done: true };
+    state.capacityHours = 8;
+    const zones = [Zone.Inbox, Zone.Now, Zone.Later, Zone.Drop] as const;
+    for (let i = 0; i < 25; i++) {
+      const zone = zones[i % zones.length];
+      state.tasks.push({ id: state.nextId++, title: `Stress task ${i + 1}`, minutes: 15 * (1 + (i % 6)), priority: 1 + (i % 3), zone, order: i });
+    }
+    const today = new Date();
+    for (let week = 8; week >= 1; week--) {
+      for (let d = 0; d < 3; d++) {
+        const day = planDay(new Date(today.getTime() - (week * 7 - d) * 86400000));
+        state.history.push({ day, plannedMinutes: 300, doneCount: 3 + (week % 3), doneMinutes: 120 });
+      }
+    }
+    state.jar.count = state.history.reduce((n, r) => n + r.doneCount, 0) + 4;
+    state.jar.minutes = state.jar.count * 40;
+    state.today.doneCount = 4;
+    this.resetting = true;
+    await saveState(state);
+    location.reload();
+  }
+
   /** Dev-only: wipe saved state and reload, for testing the first run or recording a demo. */
   async resetForDemo(): Promise<void> {
     this.resetting = true;
@@ -790,6 +817,7 @@ export class PlannerSystem extends createSystem({
   }
 
   private createTile(task: StoredTask, dropIn: boolean): void {
+    if (dropIn && task.kind !== 'meeting') markMoment('firstTileAt');
     const meetingTime =
       task.kind === 'meeting' && task.startMs && task.endMs
         ? `${clockTime(task.startMs)}-${clockTime(task.endMs)}`
@@ -904,6 +932,7 @@ export class PlannerSystem extends createSystem({
 
   /** Moves a task to a zone's top (with Undo for Drop and a split offer for big work in Now). Returns the zone's name. */
   private assignZone(task: StoredTask, zone: Zone): string {
+    if (zone !== Zone.Inbox) markMoment('firstSortAt');
     const from = { zone: task.zone, order: task.order };
     task.zone = zone;
     task.order = this.maxOrder(zone) + 1;
@@ -1854,6 +1883,7 @@ export class PlannerSystem extends createSystem({
     this.placementState = state;
     const message = PLACEMENT_STATUS[state];
     if (message) this.setStatus(message);
+    if (state === PlacementState.Placed) markMoment('trayPlacedAt');
     if (state === PlacementState.Placed && previous !== '') {
       // The tray moved onto the real desk: let every tile drop into its new spot.
       for (const entity of this.tilesById.values()) {
