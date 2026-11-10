@@ -45,13 +45,80 @@ export function normaliseCalendarUrl(raw: string): URL | undefined {
 }
 
 /** Failures we raise ourselves. Their messages never contain the link or event data, so they are safe to log. */
-class CalendarFetchError extends Error {
+export class CalendarFetchError extends Error {
   readonly retryable: boolean;
 
   constructor(message: string, retryable = false) {
     super(message);
     this.retryable = retryable;
   }
+}
+
+/** True for addresses a public calendar host never resolves to: loopback, private, link-local, CGNAT, multicast. */
+export function isPrivateAddress(address: string): boolean {
+  const ip = address.toLowerCase().replace(/^::ffff:/, ''); // IPv4-mapped IPv6
+  const v4 = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
+      (a === 169 && b === 254) || // link-local, including cloud metadata
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+  return ip === '::' || ip === '::1' || /^f[cd]/.test(ip) || /^fe[89ab]/.test(ip) || /^ff/.test(ip);
+}
+
+/** What the fetcher needs from the outside world; tests pass fakes. */
+export interface FetchDeps {
+  fetch: typeof fetch;
+  /** Every address a host name resolves to. */
+  lookup: (host: string) => Promise<string[]>;
+}
+
+const defaultDeps: FetchDeps = {
+  fetch,
+  lookup: async (host) => {
+    const { lookup } = await import('node:dns/promises');
+    return (await lookup(host, { all: true })).map((entry) => entry.address);
+  },
+};
+
+const MAX_REDIRECTS = 3;
+
+/** Every hop must stay https, on an allowed calendar host, and resolve only to public addresses. */
+async function checkHop(url: URL, deps: FetchDeps): Promise<void> {
+  if (url.protocol !== 'https:') throw new CalendarFetchError('calendar link left https');
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (/^[\d.]+$/.test(host) || host.includes(':')) throw new CalendarFetchError('calendar link is an IP address');
+  if (!allowedHost(host)) throw new CalendarFetchError(`redirected to ${host}`);
+  const addresses = await deps.lookup(host);
+  if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
+    throw new CalendarFetchError(`${host} resolves to a private address`);
+  }
+}
+
+/** Reads at most MAX_BYTES, cancelling the download as soon as it is exceeded. */
+async function readLimited(response: Response): Promise<string> {
+  const declared = Number(response.headers.get('content-length') ?? 0);
+  if (declared > MAX_BYTES) throw new CalendarFetchError(`calendar too large (${declared} bytes)`);
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BYTES) {
+      await reader.cancel();
+      throw new CalendarFetchError(`calendar too large (over ${MAX_BYTES} bytes)`);
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /** Recent fetches, keyed by link, in memory only: reloads don't re-hit the provider. */
@@ -66,37 +133,47 @@ async function fetchIcs(url: URL): Promise<string> {
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.text;
   let text: string;
   try {
-    text = await fetchIcsOnce(url);
+    text = await fetchCalendarText(url);
   } catch (error) {
     if (!(error instanceof CalendarFetchError && error.retryable)) throw error;
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-    text = await fetchIcsOnce(url);
+    text = await fetchCalendarText(url);
   }
   cache.set(key, { text, at: Date.now() });
   if (cache.size > 200) cache.delete(cache.keys().next().value!); // bound memory
   return text;
 }
 
-async function fetchIcsOnce(url: URL): Promise<string> {
+/**
+ * One guarded download. Redirects are followed by hand (at most three), and every hop is
+ * re-checked, so an allowed host cannot bounce the server to an internal address.
+ */
+export async function fetchCalendarText(start: URL, deps: FetchDeps = defaultDeps): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
-    if (!allowedHost(new URL(response.url).hostname)) {
-      throw new CalendarFetchError(`redirected to ${new URL(response.url).hostname}`);
+    let url = start;
+    for (let hop = 0; ; hop++) {
+      await checkHop(url, deps);
+      const response = await deps.fetch(url, { signal: controller.signal, redirect: 'manual' });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location || hop >= MAX_REDIRECTS) throw new CalendarFetchError('too many calendar redirects');
+        url = new URL(location, url);
+        continue;
+      }
+      if (!response.ok) {
+        const retryable = response.status === 429 || response.status >= 500;
+        throw new CalendarFetchError(`calendar returned ${response.status}`, retryable);
+      }
+      const text = await readLimited(response);
+      if (!text.trimStart().startsWith('BEGIN:VCALENDAR')) {
+        // e.g. a sign-in or "unusual traffic" page: report the type only, never the body.
+        const type = response.headers.get('content-type') ?? 'unknown';
+        throw new CalendarFetchError(`not an iCal file (${type}, ${text.length} bytes, final host ${url.hostname})`);
+      }
+      return text;
     }
-    if (!response.ok) {
-      const retryable = response.status === 429 || response.status >= 500;
-      throw new CalendarFetchError(`calendar returned ${response.status}`, retryable);
-    }
-    const text = await response.text();
-    if (text.length > MAX_BYTES) throw new CalendarFetchError(`calendar too large (${text.length} bytes)`);
-    if (!text.trimStart().startsWith('BEGIN:VCALENDAR')) {
-      // e.g. a sign-in or "unusual traffic" page: report the type only, never the body.
-      const type = response.headers.get('content-type') ?? 'unknown';
-      throw new CalendarFetchError(`not an iCal file (${type}, ${text.length} bytes, final host ${new URL(response.url).hostname})`);
-    }
-    return text;
   } finally {
     clearTimeout(timer);
   }

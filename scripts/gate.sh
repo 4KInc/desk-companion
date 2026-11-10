@@ -1,5 +1,5 @@
 #!/bin/sh
-# The four checks every commit must pass (see docs/SUBMISSION.md, "How we work").
+# The four checks every commit must pass.
 set -e
 npm test --silent > /dev/null
 npm run --silent typecheck
