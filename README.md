@@ -10,6 +10,7 @@ first draft of the task. Built for the Meta VR Start Developer Competition 2026.
 - Live: https://desk-companion-1031148889398.us-central1.run.app
 - Concept, status and roadmap: `idea-briefs/06-desk-companion.pdf`
 - Submission kit (description, hand interactions, video plan): `docs/SUBMISSION.md`
+- Release checklist (deploy, cost, rule compliance, owner-only steps): `docs/RELEASE.md`
 
 ## Run locally
 
@@ -20,14 +21,15 @@ npm run dev                                  # managed browser with the IWER XR 
 ```
 
 `iwsdk.config.json` (not `vite.config.ts`) is the project authority: scene, assets,
-components and XR features. In dev, **Alt+Shift+R** resets to a brand-new user.
+components and XR features. In dev, **Alt+Shift+R** resets to a brand-new user and **Alt+Shift+S** loads the
+worst case for profiling (25 tiles, 8 weeks of jar layers, a returning user).
 
 ## Checks
 
 ```sh
-npm test                 # logic tests: day rollover, streaks, jar layers, bias model, coach steps, calendar parsing, meeting match
-npm run typecheck
-npm run build && npm run build:server
+./scripts/gate.sh        # tests, typecheck, build, server build (run before every commit)
+npm run latency -- 5     # agent p50/p95 and tokens per endpoint and model (uses the API key)
+python3 scripts/fov_check.py   # angular offsets of the desk UI from a seated gaze
 ```
 
 Quest app packaging (optional, Horizon Store): see `docs/PACKAGING.md`.
@@ -73,6 +75,10 @@ src/brain-dump.ts            agent calls with offline fallbacks
 src/companion.ts             desk buddy animation and speech bubble
 src/calendar-client.ts       today's meetings and the sample day
 src/meeting-match.ts         skips brain-dump tasks that are already meetings
+src/desk-anchor.ts           persistent WebXR anchor for the tray (anchor-store.ts: handle storage)
+src/dwell.ts, look-select.ts Look to select: cone targeting, dwell timer, radial fill
+src/agent-call.ts            one agent request with timeout and local fallback
+src/session-metrics.ts       first-five-minutes timings for ?playtest=1
 server/                      production server and Claude endpoints
 scripts/demo_run.py          scripted emulator demo for the video
 ```

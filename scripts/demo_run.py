@@ -176,6 +176,18 @@ def first_tile(zone, min_minutes=0, max_minutes=10_000):
     return None
 
 
+def point_in_card(button_id, row_id, card_id):
+    """World position of a button inside a row inside a card (each layout is relative to its parent)."""
+    b = panel_layout(button_id)["layout"]
+    r = panel_layout(row_id)["layout"]
+    c = panel_layout(card_id)["layout"]
+    x = c["relativeCenter"][0] + r["relativeCenter"][0] + b["relativeCenter"][0]
+    y = c["relativeCenter"][1] + r["relativeCenter"][1]
+    s, tilt = PANEL["scale"] / 100, PANEL["tilt"]
+    local = (x * s, PANEL["y"] + y * s * math.cos(tilt), PANEL["z"] + y * s * math.sin(tilt))
+    return desk_to_world(local, desk_pose())
+
+
 def shown(element_id):
     element = panel_layout(element_id)
     return bool(element and element["state"]["displayed"])
@@ -303,6 +315,31 @@ def main():
     pause(5)
     tap("recap-end", card_id="recap-card")
     pause(4)
+
+    say("Next session: the tray comes back on the same desk (persistent anchor)")
+    cli("xr", "exit", payload={})
+    time.sleep(3)
+    cli("xr", "enter", payload={})
+    time.sleep(6)
+    cli("xr", "set-input-mode", payload={"mode": "hand"})
+    cli("xr", "set-transform", payload={"device": "headset", "position": SEATED_HEAD})
+    cli("xr", "look-at", payload={"device": "headset", "target": desk_to_world((0, 0.05, -0.05), desk_pose())})
+    hand_rest()
+    pause(4)
+    report()
+
+    say("Look to select: switch it on, then press a button by holding your gaze")
+    tap("options-button", from_top=20)
+    look = point_in_card("opt-look", "opt-row-3", "options-card")
+    cli("xr", "look-at", payload={"device": "hand-right", "target": look})
+    time.sleep(0.4)
+    cli("xr", "select", payload={"device": "hand-right", "duration": 0.2})
+    pause(1)
+    tap("opt-done", card_id="options-card")
+    hand_rest()
+    cli("xr", "look-at", payload={"device": "headset", "target": panel_point("add-30", row_id="add-row")})
+    pause(3)  # the ring fills, then 30m is pressed without a hand
+    report()
     say("Done")
 
 
