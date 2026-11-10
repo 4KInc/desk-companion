@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { handleBrainDumpRequest, handleDelegateRequest, handleSplitRequest } from './brain-dump.js';
 import { handleCalendarRequest } from './calendar.js';
+import { AGENT_PATHS, faultInjectionEnabled, faultResponse, handleFaultControl } from './fault.js';
 
 /**
  * Production server (Cloud Run): serves the Vite build and the brain-dump API
@@ -170,6 +171,18 @@ async function api(req: IncomingMessage, res: ServerResponse, pathname: string):
     send(res, 413, JSON.stringify({ error: 'Request too large' }));
     return;
   }
+  if (AGENT_PATHS.includes(pathname)) {
+    // Test-only fault injection; currentFault() is always '' in production unless FAULT_INJECTION=1.
+    const fault = await faultResponse();
+    if (fault === 'offline') {
+      req.socket.destroy(); // the client sees a network error, as if offline
+      return;
+    }
+    if (fault) {
+      send(res, fault.status, await fault.text());
+      return;
+    }
+  }
   const handler =
     pathname === '/api/split-task'
       ? handleSplitRequest
@@ -184,6 +197,14 @@ async function api(req: IncomingMessage, res: ServerResponse, pathname: string):
       headers: { 'content-type': 'application/json' },
       body,
     }),
+  );
+  send(res, response.status, await response.text());
+}
+
+async function faultControl(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = req.method === 'POST' ? await readBody(req) : undefined;
+  const response = await handleFaultControl(
+    new Request('http://localhost/api/__fault', { method: req.method, headers: { 'content-type': 'application/json' }, body }),
   );
   send(res, response.status, await response.text());
 }
@@ -218,8 +239,10 @@ async function staticFile(req: IncomingMessage, res: ServerResponse, pathname: s
 createServer((req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   const isApi = ['/api/brain-dump', '/api/split-task', '/api/calendar', '/api/delegate'].includes(pathname);
-  const handled =
-    pathname === '/api/diagnostics'
+  const faultRoute = pathname === '/api/__fault' && faultInjectionEnabled() && (req.method !== 'POST' || sameOrigin(req));
+  const handled = faultRoute
+    ? faultControl(req, res)
+    : pathname === '/api/diagnostics'
       ? diagnostics(req, res)
       : isApi
         ? api(req, res, pathname)

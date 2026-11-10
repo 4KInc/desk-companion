@@ -25,8 +25,35 @@ function brainDumpDevApi(): Plugin {
       Object.assign(process.env, loadEnv(server.config.mode, process.cwd(), 'ANTHROPIC_'));
       server.middlewares.use(async (req, res, next) => {
         const path = (req.url ?? '').split('?')[0];
-        if (!['/api/brain-dump', '/api/split-task', '/api/calendar', '/api/delegate'].includes(path)) return next();
+        if (!['/api/brain-dump', '/api/split-task', '/api/calendar', '/api/delegate', '/api/__fault'].includes(path)) return next();
         const body = req.method === 'POST' ? await readBody(req) : undefined;
+        const fault = await server.ssrLoadModule('/server/fault.ts');
+        const asRequest = () =>
+          new Request(`http://localhost${path}`, {
+            method: req.method,
+            headers: { 'content-type': 'application/json' },
+            body: body ? new Uint8Array(body) : undefined,
+          });
+        if (path === '/api/__fault') {
+          const response: Response = await fault.handleFaultControl(asRequest());
+          res.statusCode = response.status;
+          res.setHeader('content-type', 'application/json');
+          res.end(await response.text());
+          return;
+        }
+        if (fault.AGENT_PATHS.includes(path)) {
+          const injected = await fault.faultResponse();
+          if (injected === 'offline') {
+            req.socket.destroy();
+            return;
+          }
+          if (injected) {
+            res.statusCode = injected.status;
+            res.setHeader('content-type', 'application/json');
+            res.end(await injected.text());
+            return;
+          }
+        }
         const api = await server.ssrLoadModule('/server/brain-dump.ts');
         const calendar = await server.ssrLoadModule('/server/calendar.ts');
         const handler =

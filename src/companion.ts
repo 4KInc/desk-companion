@@ -107,6 +107,7 @@ export class Companion {
 
   /** Shows a short line in the speech bubble for `seconds`. */
   say(text: string, seconds = 7): void {
+    if (import.meta.env.DEV) console.info(`[buddy] ${text}`); // lets scripts/fault_test.py check what was said
     const ctx = this.canvas.getContext('2d')!;
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     ctx.fillStyle = 'rgba(251, 252, 254, 0.97)';
