@@ -69,9 +69,11 @@ export class Companion {
     this.canvas.height = CANVAS_H;
     this.texture = new CanvasTexture(this.canvas);
     this.texture.colorSpace = SRGBColorSpace;
-    this.bubbleMaterial = new MeshBasicMaterial({ map: this.texture, transparent: true, opacity: 0, depthWrite: false });
+    // Always drawn on top: a speech bubble behind a tile stack is no use.
+    this.bubbleMaterial = new MeshBasicMaterial({ map: this.texture, transparent: true, opacity: 0, depthWrite: false, depthTest: false });
     this.bubble = new Mesh(new PlaneGeometry(BUBBLE_W, BUBBLE_H), this.bubbleMaterial);
     this.bubble.name = 'buddy-bubble';
+    this.bubble.renderOrder = 20;
     this.bubble.position.set(0, 0.135, 0); // fallback when the buddy has no parent
     this.bubble.visible = false;
     // Hang the bubble on the desk, not on the buddy (which turns and is scaled), keeping its size.

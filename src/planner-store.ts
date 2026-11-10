@@ -62,7 +62,8 @@ export interface PlannerState {
   /** Task currently floating in focus mode, or 0. */
   focusTaskId: number;
   /** First-run coach progress. Users who already had data skip it. */
-  onboarding: { lineSeen: boolean; done: boolean };
+  /** overflowSeen: the first-ever overflow got its bigger moment. */
+  onboarding: { lineSeen: boolean; done: boolean; overflowSeen?: boolean };
   /** The one-time welcome (buddy greeting plus the sample day) has run. */
   welcomed: boolean;
   /** First drafts the agent wrote for tasks; the 20 most recent. */

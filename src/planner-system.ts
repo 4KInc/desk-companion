@@ -24,6 +24,7 @@ import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { LOCAL_FALLBACK_LINE } from './agent-call.js';
+import { nudgeDone, nudgeWhy } from './nudge-words.js';
 import { returnCallback } from './return-callback.js';
 import { markMoment } from './session-metrics.js';
 import { clearAnchorHandle } from './anchor-store.js';
@@ -134,6 +135,11 @@ const DWELL_SECONDS = 1.0;
 /** Angular half-size of targets for Look to select (degrees at the seated distance). */
 const LOOK_RADIUS = { button: 2.6, tileHalfWidth: 0.04, zoneHalfWidth: 0.08 } as const;
 const MAX_LOOK_CANDIDATES = 64;
+/** The first-ever overflow: the red line flares this long. */
+const OVERFLOW_FLASH_SECONDS = 1.6;
+/** Draft sheets rest this far above whatever they lie on (tray-local metres). */
+const SHEET_LIFT = 0.0015;
+const SHEET_HOME = { x: -0.36, z: -0.03 } as const;
 const LOOK_ZONE_IDS = { now: 'zone:now', later: 'zone:later', drop: 'zone:drop', inbox: 'zone:inbox' } as const;
 
 const OPTION_NAMES = {
@@ -244,6 +250,12 @@ export class PlannerSystem extends createSystem({
   private readonly lookOrigin = new Vector3();
   private readonly lookForward = new Vector3();
   private readonly lookCursor = new Vector3();
+  private overflowFlash = 0;
+  private draftSheetEntity?: Entity;
+  private sheetHeld = false;
+  /** Where the draft sheet lies, tray-local: it stays wherever it was last put down. */
+  private readonly sheetLocal = new Vector3(SHEET_HOME.x, SHEET_LIFT, SHEET_HOME.z);
+  private readonly sheetFlat = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2);
   private buddyReady = false;
   private statusBeforeCatch = '';
   private lastStatus = '';
@@ -1349,12 +1361,12 @@ export class PlannerSystem extends createSystem({
       canvas.height = 320;
       const texture = new CanvasTexture(canvas);
       texture.colorSpace = SRGBColorSpace;
-      this.draftSheet = new Mesh(new PlaneGeometry(0.075, 0.094), new MeshBasicMaterial({ map: texture }));
+      this.draftSheet = new Mesh(new PlaneGeometry(0.075, 0.094), new MeshBasicMaterial({ map: texture, side: DoubleSide }));
       this.draftSheet.name = 'draft-sheet';
-      this.draftSheet.rotation.x = -Math.PI / 2;
       this.draftSheet.userData.canvas = canvas;
-      this.draftSheet.position.set(-0.36, 0.0015, -0.03); // beside the buddy, inside the comfortable view
-      this.tray.add(this.draftSheet);
+      // Its own grabbable entity: pinch it and put it anywhere (updateDraftSheet keeps it on the desk).
+      this.draftSheetEntity = this.world.createTransformEntity(this.draftSheet);
+      this.draftSheetEntity.addComponent(OneHandGrabbable, {});
     }
     const canvas = this.draftSheet.userData.canvas as HTMLCanvasElement;
     const ctx = canvas.getContext('2d')!;
@@ -1733,7 +1745,7 @@ export class PlannerSystem extends createSystem({
     this.capacityTop = capacityTop;
     this.refreshCoach();
     this.capacityMaterial.color.setHex(anyOverflow ? 0xff5a4f : 0x5fe0d0);
-    this.capacityMaterial.opacity = anyOverflow ? 0.5 : 0.35;
+    this.capacityMaterial.opacity = anyOverflow ? 0.5 : 0.35; // tickOverflowFlash brightens it the first time
     const over = nowMinutes - this.state.capacityHours * 60;
     this.setText(
       this.capacityText,
@@ -1775,7 +1787,19 @@ export class PlannerSystem extends createSystem({
     const show =
       picks.length > 0 && this.nudgeKey !== this.dismissedNudge && !this.recapOpen && !this.pendingTook && !this.readerOpen();
     if (show && !this.nudgeVisible) {
-      this.companion?.say(`You're ${formatMinutes(over)} over your day. I picked what could wait.`);
+      // The core moment: the buddy says why, and the very first time it lands harder.
+      const firstTime = !this.state.onboarding.overflowSeen;
+      if (firstTime) {
+        this.state.onboarding.overflowSeen = true;
+        this.overflowFlash = OVERFLOW_FLASH_SECONDS;
+        this.scheduleSave();
+      }
+      let meetingMinutes = 0;
+      for (const task of this.state.tasks) if (task.kind === 'meeting' && task.zone === Zone.Now) meetingMinutes += task.minutes;
+      this.companion?.say(
+        nudgeWhy(picks, meetingMinutes > 0 ? formatMinutes(meetingMinutes) : undefined, formatMinutes(over), firstTime),
+        10,
+      );
     }
     this.nudgeVisible = show;
     this.refreshSplitCard();
@@ -1803,11 +1827,14 @@ export class PlannerSystem extends createSystem({
   private acceptNudge(): void {
     const ids = this.nudgeTaskIds;
     if (ids.length === 0) return;
+    const moved: StoredTask[] = [];
     for (const task of this.state.tasks) {
       if (!ids.includes(task.id) || task.zone !== Zone.Now) continue;
       task.zone = Zone.Later;
       task.order = this.maxOrder(Zone.Later) + 1;
+      moved.push(task);
     }
+    if (moved.length > 0) this.companion?.say(nudgeDone(moved, this.state.capacityHours), 6);
     this.relayout();
     this.setStatus(`Moved ${ids.length === 1 ? '1 tile' : `${ids.length} tiles`} to Later. Now fits your day`);
     this.scheduleSave();
@@ -2089,6 +2116,44 @@ export class PlannerSystem extends createSystem({
     this.lookPicked = undefined;
   }
 
+  /** The first overflow flares the red line once, on top of the usual wobble and sound. */
+  private tickOverflowFlash(delta: number): void {
+    if (this.overflowFlash <= 0) return;
+    this.overflowFlash = Math.max(0, this.overflowFlash - delta);
+    if (!this.wasOverflowing) return;
+    const t = this.overflowFlash / OVERFLOW_FLASH_SECONDS;
+    const pulse = this.state.settings.reduceMotion ? t : t * (0.6 + 0.4 * Math.abs(Math.sin(this.overflowFlash * 9)));
+    this.capacityMaterial.opacity = 0.5 + 0.45 * pulse;
+  }
+
+  /**
+   * The draft sheet can be picked up and put down anywhere: on release it settles flat on the
+   * desk (or the tray) where it was let go, and from then on moves with the tray.
+   */
+  private updateDraftSheet(): void {
+    const entity = this.draftSheetEntity;
+    const object = entity?.object3D;
+    if (!entity || !object || !object.visible) return;
+    if (entity.hasComponent(Grabbed)) {
+      this.sheetHeld = true;
+      return;
+    }
+    if (this.sheetHeld) {
+      this.sheetHeld = false;
+      this.local3.copy(object.position);
+      this.tray.worldToLocal(this.local3);
+      const onTray = Math.abs(this.local3.x) < TRAY.width / 2 && Math.abs(this.local3.z) < TRAY.depth / 2;
+      const farAway = Math.abs(this.local3.x) > 0.8 || Math.abs(this.local3.z) > 0.6;
+      if (farAway) this.sheetLocal.set(SHEET_HOME.x, SHEET_LIFT, SHEET_HOME.z);
+      else this.sheetLocal.set(this.local3.x, (onTray ? TRAY.surfaceY : 0) + SHEET_LIFT, this.local3.z);
+      this.sounds.play('snap', this.world3.copy(object.position));
+    }
+    this.world3.copy(this.sheetLocal);
+    this.tray.localToWorld(this.world3);
+    object.position.copy(this.world3);
+    object.quaternion.copy(this.trayQuat).multiply(this.sheetFlat);
+  }
+
   /** Whether a released tile at `point` would land with the buddy. */
   private isOverBuddy(point: Vector3): boolean {
     if (!this.buddyNode) return false;
@@ -2160,6 +2225,8 @@ export class PlannerSystem extends createSystem({
     this.trayRight.set(1, 0, 0).applyQuaternion(this.trayQuat);
     this.trackFlicks(delta);
     this.trackBuddyCatch();
+    this.updateDraftSheet();
+    this.tickOverflowFlash(delta);
     this.tickFocus(delta);
     this.updateHover();
     this.updateLookSelect(delta);

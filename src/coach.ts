@@ -1,6 +1,10 @@
 import {
   BoxGeometry,
+  CanvasTexture,
   DoubleSide,
+  SRGBColorSpace,
+  Sprite,
+  SpriteMaterial,
   Mesh,
   MeshBasicMaterial,
   RingGeometry,
@@ -17,10 +21,49 @@ const GHOST_TRAVEL = 1.6;
 const GHOST_PAUSE = 0.7;
 const GHOST_ARC = 0.12;
 
+/**
+ * A "pinch" glyph (thumb and index finger closing on a spark), drawn with shapes rather
+ * than an emoji so it looks the same on every headset.
+ */
+function pinchGlyph(): CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(17, 84, 75, 0.9)';
+  ctx.lineWidth = 22;
+  const outline = () => {
+    ctx.beginPath(); // index finger, from the top
+    ctx.moveTo(34, 18);
+    ctx.quadraticCurveTo(52, 50, 74, 64);
+    ctx.stroke();
+    ctx.beginPath(); // thumb, from below
+    ctx.moveTo(30, 112);
+    ctx.quadraticCurveTo(50, 80, 74, 68);
+    ctx.stroke();
+  };
+  outline();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 14;
+  outline();
+  ctx.strokeStyle = '#2fb5a8';
+  ctx.lineWidth = 6;
+  for (const [x1, y1, x2, y2] of [[88, 66, 112, 66], [86, 52, 104, 38], [86, 80, 104, 94]]) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
+
 /** The spatial half of the coach: a looping ghost tile and a pulsing target ring. */
 export class CoachVisuals {
   private readonly ghost: Mesh;
   private readonly ghostMaterial: MeshBasicMaterial;
+  private readonly pinchMaterial: SpriteMaterial;
   private readonly ring: Mesh;
   private readonly ringMaterial: MeshBasicMaterial;
   private readonly from = new Vector3();
@@ -50,6 +93,14 @@ export class CoachVisuals {
     this.ring.name = 'coach-ring';
     this.ring.rotation.x = -Math.PI / 2;
     this.ghost.visible = false;
+    // The pinch rides just above the ghost tile, so the motion and the gesture read together.
+    this.pinchMaterial = new SpriteMaterial({ map: pinchGlyph(), transparent: true, depthTest: false, opacity: 0 });
+    const pinch = new Sprite(this.pinchMaterial);
+    pinch.name = 'coach-pinch';
+    pinch.scale.setScalar(0.06);
+    pinch.position.set(0.03, 0.035, 0);
+    pinch.renderOrder = 5;
+    this.ghost.add(pinch);
     this.ring.visible = false;
   }
 
@@ -97,6 +148,7 @@ export class CoachVisuals {
       this.ghost.position.y += Math.sin(Math.PI * eased) * GHOST_ARC;
       // Fade in as it lifts off, fade out as it lands.
       this.ghostMaterial.opacity = 0.55 * Math.sin(Math.PI * Math.min(1, cycle / GHOST_TRAVEL));
+      this.pinchMaterial.opacity = Math.min(1, this.ghostMaterial.opacity * 2.2);
     }
   }
 }
