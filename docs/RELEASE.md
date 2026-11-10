@@ -52,6 +52,24 @@ curl -s -X POST "$U/api/delegate" -H 'content-type: application/json' -H "Origin
 Then open the URL once on the 2D page: the buddy greets, the sample day loads, **Use an
 example** makes tiles.
 
+## 3b. Live fallback test (fault injection)
+
+`python3 scripts/fault_test.py` against `npm run dev` drives the real client: brain dump on the
+2D page, split and delegate in XR with emulated hands, then `+1h` to prove the panel still
+answers, then clears the fault. Run on 10 Nov 2026 after all changes; **20 of 20 steps pass**.
+
+| Fault | Brain dump | Split | Delegate | Buttons live after | Calm line spoken |
+|---|---|---|---|---|---|
+| 429 | Made (offline), 2.1 s | Split (offline) | Offline head start | yes | yes, all three |
+| 500 | Made (offline), 2.5 s | Split (offline) | Offline head start | yes | yes, all three |
+| timeout | Made (offline), 11.0 s (9 s client limit) | Split (offline) | Offline head start | yes | yes, all three |
+| offline (socket dropped) | Made (offline), 1.8 s | Split (offline) | Offline head start | yes | yes, all three |
+| none (recovery) | Agent made, 3.6 s | Agent split | Agent drafted | yes | not needed |
+
+Split and delegate step times (17-32 s) are mostly the scripted hand carrying the tile.
+Fault injection is ignored in production (`NODE_ENV=production`) unless `FAULT_INJECTION=1` is
+set; checked against a local production build. Results: `artifacts/fault-test.json`.
+
 ## 4. Expected cost through 11 Dec
 
 - Agent: about USD 0.004 per call on Sonnet 5.5 (measured: about 1,000 input and 200 output
@@ -67,7 +85,7 @@ example** makes tiles.
 | Fully usable without a controller | Pass | Every action has a hand gesture and a panel button; hand-only emulator runs (`scripts/demo_run.py`) cover the whole day |
 | No identifiable real people | Pass | Example names are fictional first names ("Alex", "Sam"); no photos or likenesses |
 | No brand names, logos or slogans in the app | Pass | Calendar copy is generic ("your calendar's private iCal link (.ics)"); provider names remain only in the server allowlist and the Devpost text |
-| Not a thin wrapper | Pass | Time buttons, sorting, capacity, meetings, focus, jar and wind-down all work without the agent; offline fallbacks are tested (`tests/agent-call.test.mts`) |
+| Not a thin wrapper | Pass | Time buttons, sorting, capacity, meetings, focus, jar and wind-down all work without the agent; offline fallbacks unit-tested and live-tested under 429/500/timeout/offline (section 3b) |
 | English only | Pass | All UI and voice lines are English |
 | Free to access | Pass | Public URL, no account, no payment |
 | Works in a stranger's room | Pass in emulator, needs device check | Table plane, pinch-to-place and Move tray fallbacks; persistent anchors discard implausible poses. Needs a run at a desk never used before (section 6) |
@@ -95,3 +113,26 @@ example** makes tiles.
 - Live calendar fetches from Cloud Run can get HTTP 429 from Google (shared egress IPs);
   the sample day and local links work. A static egress IP (Cloud NAT) would fix it.
 - Look to select follows the head; true eye gaze only exists on eye-tracking headsets.
+- Off-centre trays: the panel and buddy swing around the user into view; on a narrow real desk
+  the buddy could end up past the desk edge (floating). Device test step 4b checks it.
+- The comfort reference is the seated resting gaze at the tray's back edge (about 37 degrees
+  down), not the tray centre: from the tray centre no layout fits the panel within +-20 degrees
+  vertically without it sinking into the desk (`scripts/fov_check.py`).
+
+## 8. If a Quest phase's p95 frame time is above 13.9 ms
+
+Trigger: any `phaseIdleP95Ms`, `phaseSortingP95Ms` or `phaseHeavyP95Ms` above 13.9 from the
+device test (`docs/DEVICE-TEST.md`). Then, in this order, re-measuring with the same
+`?playtest=1&stress=1` run after each step and stopping as soon as every phase is under:
+
+1. **Shared materials.** Tile bodies use one material per tile colour (priority/kind) instead
+   of one per tile; labels keep their own canvas texture. Fewer state changes, same draw calls.
+2. **Instanced bodies, separate labels.** Draw all tile bodies through one InstancedMesh per
+   colour, updated from each tile entity's transform every frame; keep each tile's entity as a
+   label mesh (its own canvas) so OneHandGrabbable, hover lift and the drop logic still work
+   per tile. Expected: about 25 fewer draw calls at 25 tiles.
+3. **Jar strata in one mesh.** The weekly layers as one merged geometry with vertex colours
+   (up to 7 fewer draw calls).
+
+Emulator baseline (desktop host, worst case): 176 draw calls, 36k triangles; p95 idle 11.9 ms,
+sorting 11.7 ms, heavy 11.8 ms.
