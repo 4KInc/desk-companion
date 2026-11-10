@@ -23,6 +23,7 @@ import {
 import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './brain-dump.js';
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
+import { LOCAL_FALLBACK_LINE } from './agent-call.js';
 import { EXAMPLE_DUMP } from './example-day.js';
 import { matchingMeeting } from './meeting-match.js';
 import { CoachVisuals } from './coach.js';
@@ -695,9 +696,13 @@ export class PlannerSystem extends createSystem({
     if (!this.bound || this.splitting || !trimmed) return 0;
     this.splitting = true;
     this.setStatus('Sorting your brain dump into tasks...');
+    // Visible within a frame: the buddy works while the agent thinks.
+    this.companion?.setMode('working');
+    this.companion?.say('Let me sort that into tiles...', 4);
     try {
       const split = await splitBrainDump(trimmed);
       const source = split.source;
+      if (source === 'local') this.companion?.say(LOCAL_FALLBACK_LINE, 6);
       // Anything already on today's calendar is a meeting tile; don't count its time twice.
       const meetings = this.state.tasks.filter((task) => task.kind === 'meeting');
       const skipped: StoredTask[] = [];
@@ -716,7 +721,7 @@ export class PlannerSystem extends createSystem({
         total += estimate.minutes;
         this.pushTask({ ...draft, minutes: estimate.minutes });
       }
-      if (tasks.length > 0) {
+      if (tasks.length > 0 && source === 'agent') {
         const already =
           skipped.length === 0
             ? ''
@@ -741,6 +746,7 @@ export class PlannerSystem extends createSystem({
       return tasks.length;
     } finally {
       this.splitting = false;
+      this.companion?.setMode(this.state.focusTaskId ? 'working' : 'idle');
     }
   }
 
@@ -959,8 +965,10 @@ export class PlannerSystem extends createSystem({
     if (!parent || this.splitBusy) return;
     this.splitBusy = true;
     this.setText(this.splitText, `Breaking "${parent.title}" into steps...`);
+    this.companion?.setMode('working');
     try {
       const { steps, source } = await splitTaskSteps(parent.title, parent.minutes);
+      if (source === 'local') this.companion?.say(LOCAL_FALLBACK_LINE, 6);
       const entity = this.tilesById.get(parent.id);
       // The tile may have been jarred, flicked or moved while the agent was thinking.
       if (!entity || !this.state.tasks.includes(parent) || entity.hasComponent(Grabbed)) return;
@@ -994,6 +1002,7 @@ export class PlannerSystem extends createSystem({
       );
     } finally {
       this.splitBusy = false;
+      this.companion?.setMode(this.state.focusTaskId ? 'working' : 'idle');
       this.splitOffer = undefined;
       this.refreshCards();
       this.relayout();
@@ -1193,7 +1202,7 @@ export class PlannerSystem extends createSystem({
       this.showDraft(stored);
       this.placeDraftSheet(stored);
       this.sounds.play('pop');
-      this.companion?.say(`Draft ready: ${stored.title}. It's on the panel.`);
+      this.companion?.say(source === 'agent' ? `Draft ready: ${stored.title}. It's on the panel.` : LOCAL_FALLBACK_LINE);
       this.setStatus(`${source === 'agent' ? 'Agent drafted' : 'Offline head start for'} "${task.title}"`);
       this.draftListener?.([...this.state.drafts]);
       this.scheduleSave();

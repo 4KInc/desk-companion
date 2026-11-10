@@ -1,3 +1,4 @@
+import { callAgent } from './agent-call.js';
 import { asCategory, type Category } from './estimates.js';
 
 /** A task suggested from a brain dump, before it becomes a tile. */
@@ -15,36 +16,23 @@ export interface BrainDumpResult {
   source: 'agent' | 'local';
 }
 
-const AGENT_TIMEOUT_MS = 15000;
+const AGENT_TIMEOUT_MS = 9000; // about 2.5x the slowest measured agent call (scripts/agent-latency.mts)
 
 /**
  * Splits free text into draft tasks. Tries the agent first (the key lives on the
  * server), then falls back to a local splitter so planning still works offline.
  */
 export async function splitBrainDump(text: string): Promise<BrainDumpResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}api/brain-dump`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
-      signal: controller.signal,
-    });
-    if (response.ok) {
-      const body = (await response.json()) as { tasks?: DraftTask[] };
-      if (Array.isArray(body.tasks) && body.tasks.length > 0) {
-        return {
-          tasks: body.tasks.map((task) => ({ ...task, category: asCategory(task.category) })),
-          source: 'agent',
-        };
-      }
-    }
-  } catch {
-    // Offline, timed out, or no agent deployed: fall through to the local splitter.
-  } finally {
-    clearTimeout(timer);
-  }
+  const tasks = await callAgent(
+    `${import.meta.env.BASE_URL}api/brain-dump`,
+    { text },
+    (json) => {
+      const list = (json as { tasks?: DraftTask[] }).tasks;
+      return Array.isArray(list) && list.length > 0 ? list : undefined;
+    },
+    { timeoutMs: AGENT_TIMEOUT_MS },
+  );
+  if (tasks) return { tasks: tasks.map((task) => ({ ...task, category: asCategory(task.category) })), source: 'agent' };
   return { tasks: splitLocally(text), source: 'local' };
 }
 
@@ -109,24 +97,16 @@ export interface DraftSubtask {
  * task is split into equal numbered parts so the action still works.
  */
 export async function splitTaskSteps(title: string, minutes: number): Promise<{ steps: DraftSubtask[]; source: 'agent' | 'local' }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}api/split-task`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title, minutes }),
-      signal: controller.signal,
-    });
-    if (response.ok) {
-      const body = (await response.json()) as { subtasks?: DraftSubtask[] };
-      if (Array.isArray(body.subtasks) && body.subtasks.length >= 2) return { steps: body.subtasks, source: 'agent' };
-    }
-  } catch {
-    // fall through to the local split
-  } finally {
-    clearTimeout(timer);
-  }
+  const subtasks = await callAgent(
+    `${import.meta.env.BASE_URL}api/split-task`,
+    { title, minutes },
+    (json) => {
+      const list = (json as { subtasks?: DraftSubtask[] }).subtasks;
+      return Array.isArray(list) && list.length >= 2 ? list : undefined;
+    },
+    { timeoutMs: AGENT_TIMEOUT_MS },
+  );
+  if (subtasks) return { steps: subtasks, source: 'agent' };
   const parts = minutes >= 180 ? 3 : 2;
   const each = Math.max(15, Math.round(minutes / parts / 15) * 15);
   const steps = Array.from({ length: parts }, (_, i) => ({
@@ -149,24 +129,16 @@ export async function draftForTask(
   minutes: number,
   category: string,
 ): Promise<{ draft: TaskDraft; source: 'agent' | 'local' }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}api/delegate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title, minutes, category }),
-      signal: controller.signal,
-    });
-    if (response.ok) {
-      const body = (await response.json()) as { draft?: TaskDraft };
-      if (body.draft?.body) return { draft: body.draft, source: 'agent' };
-    }
-  } catch {
-    // fall through to the local head start
-  } finally {
-    clearTimeout(timer);
-  }
+  const draft = await callAgent(
+    `${import.meta.env.BASE_URL}api/delegate`,
+    { title, minutes, category },
+    (json) => {
+      const value = (json as { draft?: TaskDraft }).draft;
+      return value?.body ? value : undefined;
+    },
+    { timeoutMs: AGENT_TIMEOUT_MS },
+  );
+  if (draft) return { draft, source: 'agent' };
   return {
     source: 'local',
     draft: {

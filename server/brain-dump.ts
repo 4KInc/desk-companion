@@ -38,19 +38,43 @@ const SYSTEM_PROMPT = `You turn a person's morning brain dump into task cards fo
 
 let client: Anthropic | undefined;
 
+/**
+ * Model per endpoint, chosen by measured latency (scripts/agent-latency.mts) and overridable
+ * per deploy: DC_MODEL_BRAIN_DUMP, DC_MODEL_SPLIT, DC_MODEL_DELEGATE.
+ */
+export function modelFor(endpoint: 'brainDump' | 'split' | 'delegate'): string {
+  const env = { brainDump: 'DC_MODEL_BRAIN_DUMP', split: 'DC_MODEL_SPLIT', delegate: 'DC_MODEL_DELEGATE' }[endpoint];
+  return process.env[env] || DEFAULT_MODELS[endpoint];
+}
+
+/** Token use of the most recent agent call, for scripts/agent-latency.mts cost estimates. */
+export const lastUsage = { input: 0, output: 0 };
+
+function recordUsage(usage: { input_tokens: number; output_tokens: number }): void {
+  lastUsage.input = usage.input_tokens;
+  lastUsage.output = usage.output_tokens;
+}
+
+const DEFAULT_MODELS = { brainDump: 'claude-sonnet-5-5', split: 'claude-sonnet-5-5', delegate: 'claude-sonnet-5-5' };
+
+/** Low effort keeps structured extraction quick; Haiku 4.5 has no effort setting. */
+function effortFor(model: string): { effort?: 'low' } {
+  return model.startsWith('claude-haiku-4') ? {} : { effort: 'low' };
+}
+
 export async function splitBrainDump(text: string): Promise<DraftTask[]> {
   client ??= new Anthropic();
   const response = await client.beta.messages.parse({
-    model: 'claude-opus-5-5',
-    max_tokens: 4000,
-    // Short structured extraction: low effort keeps the round trip quick.
-    output_config: { effort: 'low', format: betaZodOutputFormat(TaskList) },
+    model: modelFor('brainDump'),
+    max_tokens: 2500,
+    output_config: { ...effortFor(modelFor('brainDump')), format: betaZodOutputFormat(TaskList) },
     // Refusal fallback: if a safety classifier declines, the API reroutes by category.
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: text }],
   });
+  recordUsage(response.usage);
   if (response.stop_reason === 'refusal' || !response.parsed_output) return [];
   return response.parsed_output.tasks.map(clampTask).filter((task) => task.title.length > 0);
 }
@@ -119,14 +143,15 @@ const SPLIT_PROMPT = `You break one large task from someone's day plan into 2 to
 export async function splitTask(title: string, minutes: number): Promise<DraftSubtask[]> {
   client ??= new Anthropic();
   const response = await client.beta.messages.parse({
-    model: 'claude-opus-5-5',
-    max_tokens: 2000,
-    output_config: { effort: 'low', format: betaZodOutputFormat(SubtaskList) },
+    model: modelFor('split'),
+    max_tokens: 1000,
+    output_config: { ...effortFor(modelFor('split')), format: betaZodOutputFormat(SubtaskList) },
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     system: SPLIT_PROMPT,
     messages: [{ role: 'user', content: `Task: ${title}\nEstimate: ${minutes} minutes` }],
   });
+  recordUsage(response.usage);
   if (response.stop_reason === 'refusal' || !response.parsed_output) return [];
   const steps = response.parsed_output.subtasks
     .map((step) => ({
@@ -184,14 +209,15 @@ const DELEGATE_PROMPT = `You give someone a head start on one task from their da
 export async function draftTask(title: string, minutes: number, category: string): Promise<DraftResult | undefined> {
   client ??= new Anthropic();
   const response = await client.beta.messages.parse({
-    model: 'claude-opus-5-5',
-    max_tokens: 2000,
-    output_config: { effort: 'low', format: betaZodOutputFormat(Draft) },
+    model: modelFor('delegate'),
+    max_tokens: 1500,
+    output_config: { ...effortFor(modelFor('delegate')), format: betaZodOutputFormat(Draft) },
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     system: DELEGATE_PROMPT,
     messages: [{ role: 'user', content: `<task>${title}</task>\nEstimate: ${minutes} minutes\nKind of work: ${category}` }],
   });
+  recordUsage(response.usage);
   if (response.stop_reason === 'refusal' || !response.parsed_output) return undefined;
   const draft = response.parsed_output;
   return {
