@@ -1329,7 +1329,7 @@ export class PlannerSystem extends createSystem({
       this.draftSheet.name = 'draft-sheet';
       this.draftSheet.rotation.x = -Math.PI / 2;
       this.draftSheet.userData.canvas = canvas;
-      this.draftSheet.position.set(-0.39, 0.0015, 0.17);
+      this.draftSheet.position.set(-0.36, 0.0015, -0.03); // beside the buddy, inside the comfortable view
       this.tray.add(this.draftSheet);
     }
     const canvas = this.draftSheet.userData.canvas as HTMLCanvasElement;

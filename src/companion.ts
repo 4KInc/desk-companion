@@ -12,6 +12,12 @@ export type CompanionMode = 'idle' | 'working';
 
 const BUBBLE_W = 0.17;
 const BUBBLE_H = 0.06;
+/**
+ * Where the bubble floats, in the desk's frame (metres): nudged toward the tray's centre and
+ * the user, so it stays within about 25 degrees of a seated gaze at the tray instead of out
+ * over the buddy at the edge of the view.
+ */
+const BUBBLE_OFFSET = { inward: 0.07, up: 0.13, forward: 0.12 } as const;
 const CANVAS_W = 512;
 const CANVAS_H = 180;
 
@@ -61,9 +67,15 @@ export class Companion {
     this.bubbleMaterial = new MeshBasicMaterial({ map: this.texture, transparent: true, opacity: 0, depthWrite: false });
     this.bubble = new Mesh(new PlaneGeometry(BUBBLE_W, BUBBLE_H), this.bubbleMaterial);
     this.bubble.name = 'buddy-bubble';
-    this.bubble.position.set(0, 0.135, 0);
+    this.bubble.position.set(0, 0.135, 0); // fallback when the buddy has no parent
     this.bubble.visible = false;
-    node.add(this.bubble);
+    // Hang the bubble on the desk, not on the buddy (which turns and is scaled), keeping its size.
+    if (node.parent) {
+      this.bubble.scale.setScalar(node.scale.x);
+      node.parent.add(this.bubble);
+    } else {
+      node.add(this.bubble);
+    }
   }
 
   setMode(mode: CompanionMode): void {
@@ -159,6 +171,10 @@ export class Companion {
 
     // Speech bubble: face the user, fade in and out.
     if (this.bubble.visible) {
+      if (this.bubble.parent !== this.node) {
+        const p = this.node.position;
+        this.bubble.position.set(p.x - Math.sign(p.x) * BUBBLE_OFFSET.inward, p.y + BUBBLE_OFFSET.up, p.z + BUBBLE_OFFSET.forward);
+      }
       this.bubble.lookAt(this.head);
       this.bubbleTime -= delta;
       const target = this.bubbleTime > 0 ? 1 : 0;
