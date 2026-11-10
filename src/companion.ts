@@ -20,6 +20,11 @@ const BUBBLE_H = 0.06;
 const BUBBLE_OFFSET = { inward: 0.07, up: 0.13, forward: 0.12 } as const;
 const CANVAS_W = 512;
 const CANVAS_H = 180;
+/** [font px, line height, max lines], tried in order. */
+const BUBBLE_TYPE: ReadonlyArray<readonly [number, number, number]> = [
+  [34, 40, 3],
+  [26, 31, 4],
+];
 
 /**
  * The desk buddy: the agent's face on the desk and a body double during focus.
@@ -112,11 +117,22 @@ export class Companion {
     ctx.lineTo(CANVAS_W / 2 + 18, CANVAS_H - 25);
     ctx.fill();
     ctx.fillStyle = '#1f2328';
-    ctx.font = '600 34px system-ui, sans-serif';
     ctx.textBaseline = 'top';
-    const lines = wrap(ctx, text, CANVAS_W - 64).slice(0, 3);
-    const top = (CANVAS_H - 24 - lines.length * 40) / 2;
-    lines.forEach((line, i) => ctx.fillText(line, 32, top + i * 40));
+    // Big type for short lines; longer ones step down so the whole line still fits.
+    let lines: string[] = [];
+    let lineHeight = 40;
+    for (const [size, height, max] of BUBBLE_TYPE) {
+      ctx.font = `600 ${size}px system-ui, sans-serif`;
+      lines = wrap(ctx, text, CANVAS_W - 64);
+      lineHeight = height;
+      if (lines.length <= max) break;
+      if (size === BUBBLE_TYPE[BUBBLE_TYPE.length - 1][0]) {
+        lines = lines.slice(0, max);
+        lines[max - 1] = `${lines[max - 1].replace(/[\s.,;:]+$/, '')}...`;
+      }
+    }
+    const top = (CANVAS_H - 24 - lines.length * lineHeight) / 2;
+    lines.forEach((line, i) => ctx.fillText(line, 32, top + i * lineHeight));
     this.texture.needsUpdate = true;
     this.bubbleTime = seconds;
     this.bubble.visible = true;

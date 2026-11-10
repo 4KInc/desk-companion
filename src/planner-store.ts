@@ -235,6 +235,11 @@ export async function saveState(state: PlannerState): Promise<void> {
   }
 }
 
+/** Whether moving from plan day `from` to `to` crosses into a new week (Monday start). */
+export function startsNewWeek(from: string, to: string): boolean {
+  return from !== '' && to > from && weekStart(from) !== weekStart(to);
+}
+
 /** Monday of the week containing `day` (YYYY-MM-DD, local). */
 export function weekStart(day: string): string {
   const [y, m, d] = day.split('-').map(Number);

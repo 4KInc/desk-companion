@@ -24,6 +24,7 @@ import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { LOCAL_FALLBACK_LINE } from './agent-call.js';
+import { returnCallback } from './return-callback.js';
 import { markMoment } from './session-metrics.js';
 import { clearAnchorHandle } from './anchor-store.js';
 import { DwellTimer, pickTarget, type DwellCandidate } from './dwell.js';
@@ -40,6 +41,7 @@ import {
   emptyState,
   endDay,
   jarLayers,
+  startsNewWeek,
   loadState,
   planDay,
   plannedMinutes,
@@ -651,6 +653,12 @@ export class PlannerSystem extends createSystem({
         state.history.push({ day, plannedMinutes: 300, doneCount: 3 + (week % 3), doneMinutes: 120 });
       }
     }
+    // As if last used yesterday: three tiles were pushed to tomorrow, and writing ran long.
+    state.day = planDay(new Date(today.getTime() - 86400000));
+    for (const task of state.tasks.slice(0, 3)) task.zone = Zone.Tomorrow;
+    for (const [estimate, actual] of [[60, 85], [30, 42], [45, 63], [60, 84]]) {
+      state.completions.push({ category: 'writing', estimate, actual });
+    }
     state.jar.count = state.history.reduce((n, r) => n + r.doneCount, 0) + 4;
     state.jar.minutes = state.jar.count * 40;
     state.today.doneCount = 4;
@@ -675,6 +683,7 @@ export class PlannerSystem extends createSystem({
 
   private spawnSavedTiles(): void {
     const returning = this.state.tasks.filter((task) => task.zone === Zone.Tomorrow).length;
+    const dayBefore = this.state.day;
     const rolled = rollover(this.state);
     for (const task of this.state.tasks) {
       task.priority ??= 2; // tasks saved before priorities existed
@@ -694,6 +703,7 @@ export class PlannerSystem extends createSystem({
     this.refreshJar();
     if (rolled) {
       this.scheduleSave();
+      this.greetNewDay(dayBefore, returning);
       this.setStatus(
         returning > 0
           ? `Good morning. ${returning} ${returning === 1 ? 'tile' : 'tiles'} came back from yesterday`
@@ -709,8 +719,22 @@ export class PlannerSystem extends createSystem({
   }
 
   /** Live date change (the app was left open overnight): sync tiles with the rolled-over plan. */
+  /** One concrete line from stored data when a new plan day begins (nothing said if nothing is true). */
+  private greetNewDay(dayBefore: string, returning: number): void {
+    if (!this.state.welcomed) return; // the first-visit welcome speaks instead
+    const line = returnCallback({
+      returning,
+      newWeekLayer: startsNewWeek(dayBefore, this.state.day) && this.state.jar.count > 0,
+      insight: biasLine(this.state.completions),
+    });
+    if (line) this.companion?.say(line, 10);
+  }
+
   private applyRollover(): void {
+    const dayBefore = this.state.day;
+    const returning = this.state.tasks.filter((task) => task.zone === Zone.Tomorrow).length;
     if (!rollover(this.state)) return;
+    this.greetNewDay(dayBefore, returning);
     const kept = new Set(this.state.tasks.map((task) => task.id));
     for (const [id, entity] of this.tilesById) {
       if (!kept.has(id) && !entity.hasComponent(Grabbed)) this.removeTile(id, entity);
