@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { deviceName, framePercentiles, markMoment, msSinceEnter, startSessionMetrics } from '../src/session-metrics.ts';
+import { deviceName, framePercentiles, framePhase, markMoment, msSinceEnter, startSessionMetrics } from '../src/session-metrics.ts';
 
 assert.equal(msSinceEnter('trayPlacedAt'), -1, 'nothing before XR');
 markMoment('firstTileAt', 50);
@@ -23,4 +23,9 @@ assert.equal(deviceName('Mozilla/5.0 (X11; Linux x86_64; Quest 3) OculusBrowser/
 assert.equal(deviceName('... Quest 3S) OculusBrowser'), 'Quest 3S');
 assert.equal(deviceName('Mozilla/5.0 (Macintosh)'), 'other');
 
+assert.equal(framePhase(6, false, 99), 'idle');
+assert.equal(framePhase(6, true, 99), 'sorting', 'holding a tile');
+assert.equal(framePhase(6, false, 1.2), 'sorting', 'just let go: the snap and restack');
+assert.equal(framePhase(25, true, 0), 'heavy', 'the worst case wins');
+assert.equal(framePhase(24, false, 99), 'idle');
 console.log('session metrics: all assertions passed');

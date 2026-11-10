@@ -23,6 +23,16 @@ World.create(
   world.registerSystem(PlannerSystem);
   if (playtestEnabled()) world.registerSystem(PlaytestSystem); // opt-in: ?playtest=1
   const planner = world.getSystem(PlannerSystem);
+  // ?playtest=1&stress=1 on a headset: load the worst case (25 tiles, 8 weeks of jar layers)
+  // once per tab, so one Quest run also measures the heavy phase. Replaces local planner data.
+  try {
+    if (playtestEnabled() && new URLSearchParams(location.search).get('stress') === '1' && !sessionStorage.getItem('dc-stress-done')) {
+      sessionStorage.setItem('dc-stress-done', '1');
+      void planner?.seedStress();
+    }
+  } catch {
+    // storage blocked: skip the stress state
+  }
   const overlay = mountBrainDumpOverlay((text) => planner?.addBrainDump(text) ?? Promise.resolve(0), {
     connect: (source) => planner?.connectCalendar(source) ?? Promise.reject(new Error('Not ready yet')),
     disconnect: () => planner?.disconnectCalendar(),
@@ -76,6 +86,11 @@ World.create(
       if (event.altKey && event.shiftKey && event.code === 'KeyR') void planner?.resetForDemo();
       // Alt+Shift+S: the worst-case state for profiling.
       if (event.altKey && event.shiftKey && event.code === 'KeyS') void planner?.seedStress();
+      // Alt+Shift+P: turn on ?playtest=1 diagnostics for this tab (samples print in the dev log).
+      if (event.altKey && event.shiftKey && event.code === 'KeyP') {
+        sessionStorage.setItem('dc-playtest', '1');
+        location.reload();
+      }
     });
   }
 });

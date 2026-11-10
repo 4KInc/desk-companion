@@ -42,3 +42,17 @@ export function deviceName(userAgent: string): string {
   const match = userAgent.match(/Quest (3S|3|Pro|2)/);
   return match ? `Quest ${match[1]}` : 'other';
 }
+
+export type FramePhase = 'idle' | 'sorting' | 'heavy';
+export const FRAME_PHASES: readonly FramePhase[] = ['idle', 'sorting', 'heavy'];
+/** The worst case the brief asks about: this many tiles on the tray (plus the jar's layers). */
+export const HEAVY_TILES = 25;
+/** Frames this soon after letting go of a tile still count as sorting (the snap and restack). */
+export const SORT_TAIL_SECONDS = 2;
+
+/** Which phase a frame belongs to; heavy wins, then sorting, else idle. */
+export function framePhase(tilesOnTray: number, holdingTile: boolean, secondsSinceRelease: number): FramePhase {
+  if (tilesOnTray >= HEAVY_TILES) return 'heavy';
+  if (holdingTile || secondsSinceRelease < SORT_TAIL_SECONDS) return 'sorting';
+  return 'idle';
+}

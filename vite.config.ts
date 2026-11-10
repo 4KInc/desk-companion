@@ -25,8 +25,17 @@ function brainDumpDevApi(): Plugin {
       Object.assign(process.env, loadEnv(server.config.mode, process.cwd(), 'ANTHROPIC_'));
       server.middlewares.use(async (req, res, next) => {
         const path = (req.url ?? '').split('?')[0];
-        if (!['/api/brain-dump', '/api/split-task', '/api/calendar', '/api/delegate', '/api/__fault'].includes(path)) return next();
+        if (!['/api/brain-dump', '/api/split-task', '/api/calendar', '/api/delegate', '/api/__fault', '/api/diagnostics'].includes(path)) {
+          return next();
+        }
         const body = req.method === 'POST' ? await readBody(req) : undefined;
+        if (path === '/api/diagnostics') {
+          // Dev only: print ?playtest=1 samples to the dev log (production whitelists and logs them).
+          console.log(`[playtest] ${body ? new TextDecoder().decode(body) : ''}`);
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
         const fault = await server.ssrLoadModule('/server/fault.ts');
         const asRequest = () =>
           new Request(`http://localhost${path}`, {

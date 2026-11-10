@@ -50,6 +50,11 @@ const DIAG_FIELDS: Record<string, 'string' | 'number' | 'boolean'> = {
   placementSource: 'string', hands: 'number', depth: 'boolean', speech: 'boolean',
   device: 'string', frameP50Ms: 'number', frameP95Ms: 'number', anchors: 'boolean', planeLabels: 'boolean',
   gaze: 'boolean', lookToSelect: 'boolean', msToTrayPlaced: 'number', msToFirstTile: 'number', msToFirstSort: 'number',
+  ...Object.fromEntries(
+    ['Idle', 'Sorting', 'Heavy'].flatMap((phase) =>
+      ['Frames', 'P50Ms', 'P95Ms', 'WorstMs'].map((stat) => [`phase${phase}${stat}`, 'number'] as const),
+    ),
+  ),
 };
 let dailyCount = 0;
 let dailyResetAt = Date.now() + 24 * 60 * 60 * 1000;

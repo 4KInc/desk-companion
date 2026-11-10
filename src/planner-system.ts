@@ -673,7 +673,8 @@ export class PlannerSystem extends createSystem({
     state.welcomed = true;
     state.onboarding = { lineSeen: true, done: true };
     state.capacityHours = 8;
-    const zones = [Zone.Inbox, Zone.Now, Zone.Later, Zone.Drop] as const;
+    // No Drop: the rollover below clears it, and all 25 must be on the tray for the heavy phase.
+    const zones = [Zone.Inbox, Zone.Now, Zone.Later] as const;
     for (let i = 0; i < 25; i++) {
       const zone = zones[i % zones.length];
       state.tasks.push({ id: state.nextId++, title: `Stress task ${i + 1}`, minutes: 15 * (1 + (i % 6)), priority: 1 + (i % 3), zone, order: i });
