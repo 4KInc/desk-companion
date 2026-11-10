@@ -39,7 +39,7 @@ export const PlacementState = {
 /** Lives on the `desk-setup` scene entity; tracks how the tray found the desk. */
 export const DeskPlacement = createComponent('DeskPlacement', {
   state: { type: Types.Enum, enum: PlacementState, default: PlacementState.Authored },
-  /** 'table' when a labelled table plane was used, 'surface' for tap-to-place. */
+  /** 'anchor' when last session's anchor was restored, 'table' for a labelled table plane, 'surface' for tap-to-place. */
   source: { type: Types.String, default: '' },
   /** Set by the Move tray button: place by hand only, never snap back to a detected table. */
   manual: { type: Types.Boolean, default: false },

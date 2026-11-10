@@ -11,6 +11,8 @@ import {
   type Entity,
   type Object3D,
 } from '@iwsdk/core';
+import { plausibleDeskPose } from './anchor-store.js';
+import { DeskAnchor } from './desk-anchor.js';
 import { DeskPlacement, PlacementState } from './planner-components.js';
 
 /** How long to wait for a labelled table before offering tap-to-place. */
@@ -19,11 +21,14 @@ const TABLE_SEARCH_SECONDS = 2.5;
 const TRAY_REACH = 0.45;
 /** Ignore tables further than this from the seated user. */
 const MAX_TABLE_DISTANCE = 1.6;
+/** After a restored anchor resolves, how long it may take to be located before we move on. */
+const ANCHOR_LOCATE_SECONDS = 2;
 
 /**
  * Moves the authored `desk-setup` group onto the real desk when an XR session
- * starts: a Space Setup plane labelled "table" if one is near, otherwise a
- * right-hand ray reticle the user pinches to place.
+ * starts: last session's persistent anchor if the headset still knows it, else a
+ * Space Setup plane labelled "table" if one is near, otherwise a right-hand ray
+ * reticle the user pinches to place. Every placement is anchored for next time.
  */
 export class DeskPlacementSystem extends createSystem({
   planes: { required: [XRPlane] },
@@ -42,6 +47,14 @@ export class DeskPlacementSystem extends createSystem({
   private readonly point = new Vector3();
   private readonly planePosition = new Vector3();
   private readonly onSelect = () => this.confirmReticle();
+  private readonly deskAnchor = new DeskAnchor();
+  /** A restore request is in flight; table detection waits for it (it times out by itself). */
+  private restorePending = false;
+  /** Seconds left for a restored anchor to be located. */
+  private anchorLocateTimer = 0;
+  /** A fresh placement waiting for the next XR frame to be anchored. */
+  private pendingAnchor?: { position: { x: number; y: number; z: number }; yaw: number };
+  private readonly anchorPosition = new Vector3();
 
   init(): void {
     this.cleanupFuncs.push(
@@ -77,11 +90,24 @@ export class DeskPlacementSystem extends createSystem({
     this.session?.addEventListener('select', this.onSelect);
     this.searchTimer = TABLE_SEARCH_SECONDS;
     this.setState(PlacementState.Searching);
+    const session = this.session;
+    if (session && DeskAnchor.canPersist(session)) {
+      this.restorePending = true;
+      void this.deskAnchor.restore(session).then((anchor) => {
+        if (this.session !== session) return;
+        this.restorePending = false;
+        this.anchorLocateTimer = anchor ? ANCHOR_LOCATE_SECONDS : 0;
+      });
+    }
   }
 
   private endSession(): void {
     this.session?.removeEventListener('select', this.onSelect);
     this.session = undefined;
+    this.deskAnchor.endSession();
+    this.restorePending = false;
+    this.anchorLocateTimer = 0;
+    this.pendingAnchor = undefined;
     this.hideReticle();
     if (this.deskObject) {
       this.deskObject.position.copy(this.authoredPosition);
@@ -96,6 +122,7 @@ export class DeskPlacementSystem extends createSystem({
       this.beginSession();
     }
     const state = this.desk!.getValue(DeskPlacement, 'state');
+    this.trackAnchor(state ?? "");
     if (state !== PlacementState.Searching && state !== PlacementState.Placing) return;
     if (state === PlacementState.Placing && !this.reticle) {
       this.showReticle(); // entered Placing from the Move tray button
@@ -103,6 +130,7 @@ export class DeskPlacementSystem extends createSystem({
     }
 
     this.player.head.getWorldPosition(this.head);
+    if (state === PlacementState.Searching && this.tryRestoredAnchor(delta)) return;
     const manual = this.desk!.getValue(DeskPlacement, 'manual') === true;
     const tableY = manual ? undefined : this.findTableHeight();
     if (tableY !== undefined) {
@@ -124,6 +152,72 @@ export class DeskPlacementSystem extends createSystem({
         this.setState(PlacementState.Placing);
       }
     }
+  }
+
+  /**
+   * Last session's anchor, if the headset restored and located it: place the tray there.
+   * Returns true while still waiting for it (so table detection holds off) or once placed.
+   */
+  private tryRestoredAnchor(delta: number): boolean {
+    if (this.restorePending) return true;
+    const anchor = this.deskAnchor.anchor;
+    if (!anchor || this.anchorLocateTimer <= 0) return false;
+    const pose = this.anchorPose(anchor);
+    if (!pose) {
+      this.anchorLocateTimer -= delta;
+      return this.anchorLocateTimer > 0;
+    }
+    this.anchorLocateTimer = 0;
+    if (!plausibleDeskPose(this.anchorPosition, this.head)) {
+      // A different room, or a bad relocalisation: forget it and find the desk afresh.
+      if (this.session) void this.deskAnchor.forget(this.session);
+      return false;
+    }
+    this.applyPose(this.anchorPosition, pose.yaw);
+    this.hideReticle();
+    this.setState(PlacementState.Placed, 'anchor');
+    return true;
+  }
+
+  /** Keeps the tray locked to its anchor while placed; on tracking loss it simply stays put. */
+  private trackAnchor(state: string): void {
+    const session = this.session;
+    const frame = this.world.renderer.xr.getFrame();
+    const space = this.world.renderer.xr.getReferenceSpace();
+    if (this.pendingAnchor && session && frame && space) {
+      const { position, yaw } = this.pendingAnchor;
+      this.pendingAnchor = undefined;
+      void this.deskAnchor.create(session, frame, space, position, yaw);
+    }
+    const anchor = this.deskAnchor.anchor;
+    if (state !== PlacementState.Placed || !anchor) return;
+    const pose = this.anchorPose(anchor);
+    if (pose) this.applyPose(this.anchorPosition, pose.yaw);
+  }
+
+  /** Anchor pose in reference space (= world here: the player rig never moves) into anchorPosition. */
+  private anchorPose(anchor: XRAnchor): { yaw: number } | undefined {
+    const frame = this.world.renderer.xr.getFrame();
+    const space = this.world.renderer.xr.getReferenceSpace();
+    if (!frame || !space) return undefined;
+    let pose: XRPose | undefined;
+    try {
+      pose = frame.getPose(anchor.anchorSpace, space) ?? undefined;
+    } catch {
+      return undefined; // the anchor was deleted or belongs to an ended session
+    }
+    if (!pose) return undefined;
+    const { position: p, orientation: q } = pose.transform;
+    this.anchorPosition.set(p.x, p.y, p.z);
+    return { yaw: Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z)) };
+  }
+
+  private applyPose(worldPoint: Vector3, yaw: number): void {
+    const object = this.deskObject!;
+    this.point.copy(worldPoint);
+    object.parent?.worldToLocal(this.point);
+    object.position.copy(this.point);
+    object.rotation.set(0, yaw, 0);
   }
 
   /** Height of the nearest horizontal plane labelled "table" in front of the user. */
@@ -148,12 +242,10 @@ export class DeskPlacementSystem extends createSystem({
   }
 
   private placeAt(worldPoint: Vector3, source: string): void {
-    const object = this.deskObject!;
     const yaw = Math.atan2(this.head.x - worldPoint.x, this.head.z - worldPoint.z);
-    this.point.copy(worldPoint);
-    object.parent?.worldToLocal(this.point);
-    object.position.copy(this.point);
-    object.rotation.set(0, yaw, 0);
+    this.applyPose(worldPoint, yaw);
+    // Anchor it on the next frame (createAnchor needs one); this replaces any older anchor.
+    this.pendingAnchor = { position: { x: worldPoint.x, y: worldPoint.y, z: worldPoint.z }, yaw };
     this.hideReticle();
     this.setState(PlacementState.Placed, source);
     this.desk!.setValue(DeskPlacement, 'manual', false);

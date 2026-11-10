@@ -24,6 +24,7 @@ import { draftForTask, splitBrainDump, splitTaskSteps, type DraftTask } from './
 import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './calendar-client.js';
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { LOCAL_FALLBACK_LINE } from './agent-call.js';
+import { clearAnchorHandle } from './anchor-store.js';
 import { EXAMPLE_DUMP } from './example-day.js';
 import { matchingMeeting } from './meeting-match.js';
 import { CoachVisuals } from './coach.js';
@@ -601,6 +602,11 @@ export class PlannerSystem extends createSystem({
   /** Dev-only: wipe saved state and reload, for testing the first run or recording a demo. */
   async resetForDemo(): Promise<void> {
     this.resetting = true;
+    try {
+      clearAnchorHandle(localStorage); // a brand-new user has no desk anchor either
+    } catch {
+      // storage blocked: nothing to clear
+    }
     await saveState(emptyState());
     location.reload();
   }
@@ -1812,7 +1818,12 @@ export class PlannerSystem extends createSystem({
         object.userData.spawnDrop = 0.08;
         object.userData.needsSnap = true;
       }
-      this.setStatus('Tray placed on your desk. Add a task to begin');
+      if (desk.getValue(DeskPlacement, 'source') === 'anchor') {
+        this.setStatus('Welcome back. Your desk is where you left it');
+        this.companion?.say('Welcome back. Your desk is where you left it.', 6);
+      } else {
+        this.setStatus('Tray placed on your desk. Add a task to begin');
+      }
     }
   }
 
