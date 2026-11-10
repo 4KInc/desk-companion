@@ -255,6 +255,9 @@
       <Button id="opt-motion" class="option-button"><ButtonLabel id="opt-motion-label">Reduce motion: Off</ButtonLabel></Button>
       <Button id="opt-sound" class="option-button"><ButtonLabel id="opt-sound-label">Sound: On</ButtonLabel></Button>
     </div>
+    <div id="opt-row-3" class="row">
+      <Button id="opt-look" class="option-button"><ButtonLabel id="opt-look-label">Look to select: Off</ButtonLabel></Button>
+    </div>
     <Button id="opt-done" class="xr-button"><ButtonLabel>Done</ButtonLabel></Button>
   </div>
   <div id="coach-card" class="coach" style="display: none">

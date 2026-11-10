@@ -70,7 +70,8 @@ export interface PlannerState {
   /** Calendar link (kept only on this device) or the built-in sample day. */
   calendar: { url: string; sample: boolean };
   /** Accessibility options, chosen on the panel's Options card. */
-  settings: { largeTiles: boolean; highContrast: boolean; reduceMotion: boolean; sound: boolean };
+  /** lookToSelect: hold your gaze on a button or tile to press it, no pinch needed. */
+  settings: { largeTiles: boolean; highContrast: boolean; reduceMotion: boolean; sound: boolean; lookToSelect: boolean };
 }
 
 const DB_NAME = 'desk-companion';
@@ -92,7 +93,7 @@ export function emptyState(day = planDay()): PlannerState {
     focusTaskId: 0,
     onboarding: { lineSeen: false, done: false },
     welcomed: false,
-    settings: { largeTiles: false, highContrast: false, reduceMotion: false, sound: true },
+    settings: { largeTiles: false, highContrast: false, reduceMotion: false, sound: true, lookToSelect: false },
     calendar: { url: '', sample: false },
     drafts: [],
   };

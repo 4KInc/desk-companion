@@ -25,6 +25,8 @@ import { clockTime, fetchMeetings, sampleMeetings, type DayMeeting } from './cal
 import { coachHint, coachStep, type CoachStep } from './coach-steps.js';
 import { LOCAL_FALLBACK_LINE } from './agent-call.js';
 import { clearAnchorHandle } from './anchor-store.js';
+import { DwellTimer, pickTarget, type DwellCandidate } from './dwell.js';
+import { LookSelectVisual } from './look-select.js';
 import { EXAMPLE_DUMP } from './example-day.js';
 import { matchingMeeting } from './meeting-match.js';
 import { CoachVisuals } from './coach.js';
@@ -122,11 +124,21 @@ const DRAFT_KIND_LABEL: Record<string, string> = {
   checklist: 'Checklist',
   notes: 'Notes',
 };
+/** A panel button as Look to select sees it (UIKit components are Object3Ds with signals). */
+type LookButton = Object3D & { isVisible?: { peek(): boolean } };
+/** Hold still this long to press with Look to select. */
+const DWELL_SECONDS = 1.0;
+/** Angular half-size of targets for Look to select (degrees at the seated distance). */
+const LOOK_RADIUS = { button: 2.6, tileHalfWidth: 0.04, zoneHalfWidth: 0.08 } as const;
+const MAX_LOOK_CANDIDATES = 64;
+const LOOK_ZONE_IDS = { now: 'zone:now', later: 'zone:later', drop: 'zone:drop', inbox: 'zone:inbox' } as const;
+
 const OPTION_NAMES = {
   largeTiles: 'Larger tiles',
   highContrast: 'High contrast',
   reduceMotion: 'Reduce motion',
   sound: 'Sound',
+  lookToSelect: 'Look to select',
 } as const;
 /** After a tile is set down, the panel offers Focus / Tomorrow / Split buttons for it this long. */
 const TILE_ACTIONS_SECONDS = 10;
@@ -210,6 +222,25 @@ export class PlannerSystem extends createSystem({
   private draftSheet?: Mesh;
   private draftListener?: (drafts: StoredDraft[]) => void;
   private calendarListener?: () => void;
+  private readonly panelActions: { lookId: string; element: LookButton; run: () => void }[] = [];
+  private lookCount = 0;
+  /** 'tile:<id>' strings, built once per tile instead of every frame. */
+  private readonly tileLookIds = new Map<number, string>();
+  private lookVisual?: LookSelectVisual;
+  private readonly dwell = new DwellTimer(DWELL_SECONDS);
+  private readonly lookSlots: Array<DwellCandidate & { position: Vector3 }> = Array.from({ length: MAX_LOOK_CANDIDATES }, () => ({
+    id: '',
+    position: new Vector3(),
+    radiusDeg: 0,
+  }));
+  /** A tile chosen by looking at it, waiting for the user to look at a zone. */
+  private lookPicked?: StoredTask;
+  /** A tile just moved by looking: ignored until the gaze leaves it, so it is not picked straight back up. */
+  private lookSuppressed?: string;
+  private readonly lookSuppressAt = new Vector3();
+  private readonly lookOrigin = new Vector3();
+  private readonly lookForward = new Vector3();
+  private readonly lookCursor = new Vector3();
   private buddyReady = false;
   private statusBeforeCatch = '';
   private lastStatus = '';
@@ -416,6 +447,7 @@ export class PlannerSystem extends createSystem({
       };
       element.addEventListener('click', withSound);
       this.cleanupFuncs.push(() => element.removeEventListener('click', withSound));
+      this.panelActions.push({ lookId: `btn:${id}`, element: element as unknown as LookButton, run: withSound });
     };
     on('hours-down', () => this.changeCapacity(-1));
     on('hours-up', () => this.changeCapacity(1));
@@ -440,7 +472,7 @@ export class PlannerSystem extends createSystem({
     this.splitText = panel.getElementById('split-text') as TextElement | undefined;
     on('split-accept', () => void this.acceptSplit());
     this.optionsCard = panel.getElementById('options-card') as UIKit.Container | undefined;
-    for (const id of ['opt-large-label', 'opt-contrast-label', 'opt-motion-label', 'opt-sound-label']) {
+    for (const id of ['opt-large-label', 'opt-contrast-label', 'opt-motion-label', 'opt-sound-label', 'opt-look-label']) {
       this.optionLabels[id] = panel.getElementById(id) as TextElement | undefined;
     }
     on('options-button', () => this.toggleOptions());
@@ -452,6 +484,7 @@ export class PlannerSystem extends createSystem({
     on('opt-contrast', () => this.changeSetting('highContrast'));
     on('opt-motion', () => this.changeSetting('reduceMotion'));
     on('opt-sound', () => this.changeSetting('sound'));
+    on('opt-look', () => this.changeSetting('lookToSelect'));
     this.tileActions = panel.getElementById('tile-actions') as UIKit.Container | undefined;
     this.tileActionsText = panel.getElementById('tile-actions-text') as TextElement | undefined;
     this.actionSplit = panel.getElementById('action-split') as UIKit.Component | undefined;
@@ -855,14 +888,7 @@ export class PlannerSystem extends createSystem({
     if (wasFocused && !zone) {
       this.setStatus(`Still focusing on "${task.title}"`);
     } else if (zone && zone !== task.zone) {
-      const from = { zone: task.zone, order: task.order };
-      task.zone = zone;
-      task.order = this.maxOrder(zone) + 1;
-      if (zone === Zone.Drop) this.offerUndo('drop', task, from.zone, from.order);
-      if (zone === Zone.Now && task.kind !== 'meeting' && task.minutes >= SPLIT_MIN_MINUTES && !task.splitDeclined) {
-        this.offerSplit(task);
-      }
-      const where = zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1);
+      const where = this.assignZone(task, zone);
       this.setStatus(paused ? `${paused}, moved to ${where}` : `${task.title} moved to ${where}`);
     } else if (paused) {
       this.setStatus(paused);
@@ -874,6 +900,18 @@ export class PlannerSystem extends createSystem({
     if (task.zone !== Zone.Drop) this.showTileActions(task);
     this.relayout();
     this.scheduleSave();
+  }
+
+  /** Moves a task to a zone's top (with Undo for Drop and a split offer for big work in Now). Returns the zone's name. */
+  private assignZone(task: StoredTask, zone: Zone): string {
+    const from = { zone: task.zone, order: task.order };
+    task.zone = zone;
+    task.order = this.maxOrder(zone) + 1;
+    if (zone === Zone.Drop) this.offerUndo('drop', task, from.zone, from.order);
+    if (zone === Zone.Now && task.kind !== 'meeting' && task.minutes >= SPLIT_MIN_MINUTES && !task.splitDeclined) {
+      this.offerSplit(task);
+    }
+    return zone === Zone.Inbox ? 'Inbox' : zone[0].toUpperCase() + zone.slice(1);
   }
 
   private zoneAt(p: Vector3): Zone | undefined {
@@ -1149,7 +1187,11 @@ export class PlannerSystem extends createSystem({
     this.applySettings();
     if (key === 'largeTiles' || key === 'highContrast') this.rebuildTiles();
     if (key === 'reduceMotion') this.relayout();
-    this.setStatus(`${OPTION_NAMES[key]} ${settings[key] ? 'on' : 'off'}`);
+    this.setStatus(
+      key === 'lookToSelect' && settings[key]
+        ? 'Look to select on: hold your gaze on a button to press it. Look at a tile, then a zone, to move it'
+        : `${OPTION_NAMES[key]} ${settings[key] ? 'on' : 'off'}`,
+    );
     this.scheduleSave();
   }
 
@@ -1165,6 +1207,8 @@ export class PlannerSystem extends createSystem({
     this.setText(this.optionLabels['opt-contrast-label'], `High contrast: ${onOff(highContrast)}`);
     this.setText(this.optionLabels['opt-motion-label'], `Reduce motion: ${onOff(reduceMotion)}`);
     this.setText(this.optionLabels['opt-sound-label'], `Sound: ${onOff(sound)}`);
+    this.setText(this.optionLabels['opt-look-label'], `Look to select: ${onOff(this.state.settings.lookToSelect)}`);
+    this.lookVisual?.setContrast(highContrast);
   }
 
   /** Larger tiles / High contrast change how tiles are built: rebuild every tile in place. */
@@ -1857,7 +1901,140 @@ export class PlannerSystem extends createSystem({
     this.hovered = best;
   }
 
-  /** Remembers each held tile's recent peak leftward speed (tray-relative) for flick detection. */
+  // --- Look to select (accessibility) --------------------------------------------
+
+  /**
+   * Hands-free input: hold the head on a panel button to press it; on a tile to pick it,
+   * then on a zone or the jar to move it there. Works on every headset (head direction);
+   * in the browser the mouse already does this, so it only runs in XR.
+   */
+  private updateLookSelect(delta: number): void {
+    const inXR = this.world.visibilityState.peek() !== VisibilityState.NonImmersive;
+    if (!this.state.settings.lookToSelect || !inXR || this.queries.held.entities.size > 0) {
+      if (this.lookVisual?.root.visible) this.lookVisual.hide();
+      this.dwell.reset();
+      if (!this.state.settings.lookToSelect && this.lookPicked) this.clearLookPick();
+      return;
+    }
+    if (!this.lookVisual) {
+      this.lookVisual = new LookSelectVisual();
+      this.lookVisual.setContrast(this.state.settings.highContrast);
+      this.world.createTransformEntity(this.lookVisual.root);
+    }
+    const head = this.player.head;
+    head.getWorldPosition(this.lookOrigin);
+    head.getWorldDirection(this.lookForward).negate(); // the head looks down its local -Z
+    this.lookCount = 0;
+    for (const action of this.panelActions) {
+      if (action.element.isVisible && !action.element.isVisible.peek()) continue;
+      action.element.getWorldPosition(this.world3);
+      this.addLook(action.lookId, this.world3, LOOK_RADIUS.button);
+    }
+    const picked = this.lookPicked;
+    const tileHalf = this.state.settings.largeTiles ? LOOK_RADIUS.tileHalfWidth * 1.3 : LOOK_RADIUS.tileHalfWidth;
+    for (const entity of this.queries.resting.entities) {
+      const object = entity.object3D;
+      if (!object) continue;
+      const id = entity.getValue(TaskTile, 'taskId') as number;
+      // Before a pick, only grabbable (top) tiles; after, only the picked tile (look back to cancel).
+      if (picked ? id !== picked.id : !entity.hasComponent(OneHandGrabbable)) continue;
+      let lookId = this.tileLookIds.get(id);
+      if (!lookId) this.tileLookIds.set(id, (lookId = `tile:${id}`));
+      object.getWorldPosition(this.world3);
+      this.addLook(lookId, this.world3, this.lookAngle(tileHalf, this.world3));
+    }
+    if (picked) {
+      for (const zone of STACK_ZONES) {
+        const c = ZONE_CENTRE[zone];
+        this.world3.set(c.x, TRAY.surfaceY, c.z);
+        this.tray.localToWorld(this.world3);
+        this.addLook(LOOK_ZONE_IDS[zone], this.world3, this.lookAngle(LOOK_RADIUS.zoneHalfWidth, this.world3));
+      }
+      this.world3.set(TRAY.inbox.x, TRAY.surfaceY, TRAY.inbox.z);
+      this.tray.localToWorld(this.world3);
+      this.addLook(LOOK_ZONE_IDS[Zone.Inbox], this.world3, this.lookAngle(LOOK_RADIUS.zoneHalfWidth, this.world3));
+      this.jar.getWorldPosition(this.world3);
+      this.world3.y += 0.07;
+      this.addLook('jar', this.world3, this.lookAngle(0.06, this.world3));
+    }
+    if (this.lookSuppressed) {
+      // Released once the head turns away from where the tile went (it may still be flying there).
+      this.world3.copy(this.lookSuppressAt).sub(this.lookOrigin);
+      if (this.world3.angleTo(this.lookForward) > (10 * Math.PI) / 180) this.lookSuppressed = undefined;
+    }
+    let target = pickTarget(this.lookOrigin, this.lookForward, this.lookSlots, this.lookCount);
+    if (target && target.id === this.lookSuppressed) target = undefined;
+    const { progress, fired } = this.dwell.update(target?.id, delta);
+    if (target) this.lookCursor.copy(target.position);
+    else this.lookCursor.copy(this.lookOrigin).addScaledVector(this.lookForward, 0.6);
+    this.lookVisual.show(this.lookCursor, this.lookOrigin, progress, target !== undefined);
+    if (fired) this.onLookFired(fired);
+  }
+
+  private addLook(id: string, position: Vector3, radiusDeg: number): void {
+    if (this.lookCount >= MAX_LOOK_CANDIDATES) return;
+    const slot = this.lookSlots[this.lookCount++];
+    slot.id = id;
+    slot.position.copy(position);
+    slot.radiusDeg = radiusDeg;
+  }
+
+  /** Angular half-size (degrees) of something `halfWidth` metres wide at `at`. */
+  private lookAngle(halfWidth: number, at: Vector3): number {
+    return (Math.atan2(halfWidth, Math.max(0.1, at.distanceTo(this.lookOrigin))) * 180) / Math.PI;
+  }
+
+  private onLookFired(id: string): void {
+    if (id.startsWith('btn:')) {
+      this.panelActions.find((action) => action.lookId === id)?.run();
+      return;
+    }
+    const picked = this.lookPicked;
+    if (id.startsWith('tile:')) {
+      const task = this.state.tasks.find((t) => t.id === Number(id.slice(5)));
+      if (!task) return;
+      if (picked === task) {
+        this.clearLookPick();
+        this.setStatus(`Put "${task.title}" back`);
+        return;
+      }
+      this.lookPicked = task;
+      const object = this.tilesById.get(task.id)?.object3D;
+      if (object) setTileHover(object as Mesh, true);
+      this.sounds.play('pop');
+      this.setStatus(`Now look at Now, Later, Drop or the jar to move "${task.title}"`);
+      return;
+    }
+    if (!picked || !this.state.tasks.includes(picked)) {
+      this.clearLookPick();
+      return;
+    }
+    const entity = this.tilesById.get(picked.id);
+    this.clearLookPick();
+    if (!entity) return;
+    this.lookSuppressed = this.tileLookIds.get(picked.id);
+    this.lookSuppressAt.copy(this.lookCursor); // where the user was looking when it fired
+    if (this.state.focusTaskId === picked.id) this.stopFocus();
+    if (id === 'jar') {
+      this.completeTask(entity, picked);
+      return;
+    }
+    const zone = id.slice(5) as Zone;
+    if (zone !== picked.zone) {
+      const where = this.assignZone(picked, zone);
+      this.setStatus(`${picked.title} moved to ${where}`);
+      this.sounds.play('snap');
+    }
+    this.relayout();
+    this.scheduleSave();
+  }
+
+  private clearLookPick(): void {
+    const object = this.lookPicked && this.tilesById.get(this.lookPicked.id)?.object3D;
+    if (object && this.hovered?.object3D !== object) setTileHover(object as Mesh, false);
+    this.lookPicked = undefined;
+  }
+
   /** Whether a released tile at `point` would land with the buddy. */
   private isOverBuddy(point: Vector3): boolean {
     if (!this.buddyNode) return false;
@@ -1886,6 +2063,7 @@ export class PlannerSystem extends createSystem({
     }
   }
 
+  /** Remembers each held tile's recent peak leftward speed (tray-relative) for flick detection. */
   private trackFlicks(delta: number): void {
     if (delta <= 0) return;
     const decay = Math.exp(-delta / FLICK_MEMORY);
@@ -1930,6 +2108,7 @@ export class PlannerSystem extends createSystem({
     this.trackBuddyCatch();
     this.tickFocus(delta);
     this.updateHover();
+    this.updateLookSelect(delta);
     this.sounds.updateListener(this.player.head);
     this.tickCoach(delta);
     this.nextCheck -= delta;
