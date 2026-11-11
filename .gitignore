@@ -43,3 +43,23 @@ pids/
 .cursor/mcp.json
 .vscode/mcp.json
 .codex/config.toml
+
+# Production server bundle
+server-dist/
+
+# Quest APK packaging: signing keys and build output never enter git
+twa/*.keystore
+twa/*.apk
+twa/*.aab
+twa/app/
+twa/gradle*
+twa/build/
+twa/.gradle/
+twa/*.idsig
+twa/*.gradle
+twa/manifest-checksum.txt
+twa/store_icon.png
+
+# Local test screenshots and logs
+artifacts/
+__pycache__/

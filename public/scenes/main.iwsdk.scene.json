@@ -3,101 +3,193 @@
   "units": "meters",
   "components": {
     "com.iwsdk.components.IBLGradient": {
-      "sky": [0.6902, 0.749, 0.7843, 1],
-      "equator": [0.6584, 0.7084, 0.7913, 1],
-      "ground": [0.807, 0.7758, 0.7454, 1],
+      "sky": [
+        0.6902,
+        0.749,
+        0.7843,
+        1
+      ],
+      "equator": [
+        0.6584,
+        0.7084,
+        0.7913,
+        1
+      ],
+      "ground": [
+        0.807,
+        0.7758,
+        0.7454,
+        1
+      ],
       "intensity": 1
     }
   },
   "resources": {},
+  "authoring": {
+    "views": [
+      {
+        "id": "hero",
+        "role": "hero",
+        "projection": "perspective",
+        "position": [
+          -0.18,
+          1.5,
+          0.62
+        ],
+        "target": [
+          -0.18,
+          0.74,
+          -0.4
+        ],
+        "fov": 50
+      }
+    ]
+  },
   "nodes": [
     {
-      "id": "plant-sansevieria",
-      "name": "Plant Sansevieria",
+      "id": "desk-setup",
+      "name": "Desk Setup",
       "metadata": {
         "iwsdk.validation": {
           "allowFloating": true
         }
       },
       "content": {
-        "type": "asset",
-        "asset": "plant-sansevieria"
+        "type": "group"
       },
       "transform": {
-        "position": [1.2, 0.2, -1.8],
-        "scale": 2
+        "position": [
+          0,
+          0.74,
+          -0.45
+        ]
       },
-      "components": {
-        "RayInteractable": {},
-        "DistanceGrabbable": {
-          "movementMode": "MoveFromTarget"
-        }
-      }
-    },
-    {
-      "id": "robot",
-      "name": "Robot",
-      "metadata": {
-        "iwsdk.validation": {
-          "allowFloating": true
-        }
-      },
-      "content": {
-        "type": "asset",
-        "asset": "robot"
-      },
-      "transform": {
-        "position": [-1.2, 0.4, -1.8]
-      },
-      "components": {
-        "AudioSource": {
-          "src": "./audio/chime.mp3",
-          "maxInstances": 3,
-          "playbackMode": "fade-restart"
+      "children": [
+        {
+          "id": "day-tray",
+          "name": "Day Tray",
+          "metadata": {
+            "iwsdk.validation": {
+              "allowFloating": true
+            }
+          },
+          "content": {
+            "type": "asset",
+            "asset": "day-tray"
+          },
+          "transform": {
+            "position": [
+              0,
+              0,
+              0
+            ]
+          }
         },
-        "RayInteractable": {},
-        "Robot": {}
-      }
+        {
+          "id": "done-jar",
+          "name": "Done Jar",
+          "metadata": {
+            "iwsdk.validation": {
+              "allowFloating": true
+            }
+          },
+          "content": {
+            "type": "asset",
+            "asset": "done-jar"
+          },
+          "transform": {
+            "position": [
+              0.35,
+              0,
+              -0.2
+            ]
+          }
+        },
+        {
+          "id": "desk-buddy",
+          "name": "Desk Buddy",
+          "metadata": {
+            "iwsdk.validation": {
+              "allowFloating": true
+            }
+          },
+          "content": {
+            "type": "asset",
+            "asset": "desk-buddy"
+          },
+          "transform": {
+            "position": [
+              -0.35,
+              0,
+              -0.2
+            ],
+            "rotationDeg": [
+              0,
+              20,
+              0
+            ],
+            "scale": 1.35
+          }
+        },
+        {
+          "id": "planner-panel",
+          "name": "Planner Panel",
+          "content": {
+            "type": "asset",
+            "asset": "planner-panel"
+          },
+          "transform": {
+            "position": [
+              0,
+              0.26,
+              -0.23
+            ],
+            "rotationDeg": [
+              -15,
+              0,
+              0
+            ],
+            "scale": 0.11
+          },
+          "components": {
+            "RayInteractable": {},
+            "ScreenSpace": {
+              "top": "20px",
+              "left": "20px",
+              "width": "320px",
+              "height": "300px"
+            }
+          }
+        }
+      ]
     },
     {
-      "id": "welcome-panel",
-      "name": "Welcome Panel",
-      "content": {
-        "type": "asset",
-        "asset": "welcome-panel"
-      },
+      "id": "key-light",
+      "name": "Key Light",
       "transform": {
-        "position": [0, 1.6, -2],
-        "scale": 0.4
+        "position": [
+          -0.6,
+          1.8,
+          0.4
+        ],
+        "rotationDeg": [
+          -55,
+          -25,
+          0
+        ]
       },
       "components": {
-        "RayInteractable": {},
-        "ScreenSpace": {
-          "top": "20px",
-          "left": "20px",
-          "width": "25vw",
-          "height": "40%"
+        "com.iwsdk.components.DirectionalLight": {
+          "color": [
+            1,
+            0.96,
+            0.9,
+            1
+          ],
+          "intensity": 1.2,
+          "castShadow": false
         }
       }
-    },
-    {
-      "id": "webxr-banner",
-      "name": "WebXR Banner",
-      "metadata": {
-        "iwsdk.validation": {
-          "allowFloating": true
-        }
-      },
-      "content": {
-        "type": "asset",
-        "asset": "webxr-banner"
-      },
-      "transform": {
-        "position": [0, 1, 1.8],
-        "rotationDeg": [0, 180, 0],
-        "scale": [1, -1, 1]
-      },
-      "components": {}
     }
   ]
 }

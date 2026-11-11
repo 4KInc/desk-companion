@@ -1,0 +1,12 @@
+# Upload context for `gcloud run deploy --source`. Secrets come from Secret Manager, never from .env.
+.gcloudignore
+.git
+.gitignore
+.env
+.env.*
+node_modules/
+dist/
+server-dist/
+idea-briefs/
+.iwsdk/
+*.log

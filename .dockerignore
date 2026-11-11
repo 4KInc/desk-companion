@@ -1,0 +1,12 @@
+# Never ship local secrets or build output into the image context.
+.env
+.env.*
+node_modules
+dist
+server-dist
+.git
+idea-briefs
+.iwsdk
+*.log
+
+twa

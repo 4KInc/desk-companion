@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { coachStep } from '../src/coach-steps.ts';
+import { emptyState } from '../src/planner-store.ts';
+const t = (id: number, zone: string) => ({ id, title: 'T', minutes: 30, priority: 2, zone: zone as any, order: id });
+const s = emptyState('2026-10-02');
+assert.equal(coachStep(s), 'add', 'new user starts at add');
+s.tasks = [t(1, 'tomorrow')]; assert.equal(coachStep(s), 'add', 'tomorrow pile does not count as on the tray');
+s.tasks = [t(1, 'inbox')]; assert.equal(coachStep(s), 'sort');
+s.tasks = [t(1, 'later')]; assert.equal(coachStep(s), 'line', 'any zone counts as sorted');
+s.onboarding.lineSeen = true; assert.equal(coachStep(s), 'jar');
+s.jar.count = 1; assert.equal(coachStep(s), 'complete');
+s.onboarding.done = true; assert.equal(coachStep(s), 'off', 'finished users never see it again');
+const old = emptyState(); delete (old as any).onboarding; assert.equal(coachStep(old as any), 'off', 'missing onboarding = off');
+console.log('coach steps: all assertions passed');

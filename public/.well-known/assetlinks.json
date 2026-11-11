@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.fourkinc.deskcompanion",
+      "sha256_cert_fingerprints": [
+        "4D:6E:CA:A9:B7:38:03:75:B8:51:2C:1C:BD:4C:F6:52:42:8B:04:31:D8:ED:C4:DD:29:4B:1B:E7:93:F7:FE:86"
+      ]
+    }
+  }
+]

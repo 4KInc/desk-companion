@@ -1,0 +1,329 @@
+<!--
+  Desk Companion planner panel. Horizon kit Panel/Button/ButtonLabel/Divider.
+  Element ids are addressed by src/planner-panel.ts.
+-->
+<style>
+  .panel-root {
+    flex-direction: column;
+    width: 460px;
+    padding-top: 14px;
+    padding-bottom: 16px;
+    padding-left: 18px;
+    padding-right: 18px;
+    gap: 10px;
+  }
+
+  .row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .heading {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 30px;
+    color: #1f2328;
+    flex-grow: 1;
+  }
+
+  .capacity {
+    font-size: 17px;
+    font-weight: 600;
+    color: #1f6f68;
+  }
+
+  .label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #5b616b;
+  }
+
+  .status {
+    font-size: 14px;
+    line-height: 18px;
+    color: #1f2328;
+  }
+
+  .jar {
+    font-size: 14px;
+    font-weight: 600;
+    color: #9a6400;
+  }
+
+  .step-button {
+    justify-content: center;
+  }
+
+  .add-button {
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
+  .xr-button {
+    flex-grow: 1;
+    justify-content: center;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .nudge {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #fde2d4;
+    border-color: #e8643c;
+    border-width: 2px;
+  }
+
+  .nudge-text {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 19px;
+    color: #7a2410;
+  }
+
+  .recap {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #dcebfb;
+    border-color: #3f7fd0;
+    border-width: 2px;
+  }
+
+  .recap-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #173b66;
+  }
+
+  .recap-text {
+    font-size: 15px;
+    line-height: 19px;
+    color: #173b66;
+  }
+
+  .coach {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 12px;
+    background-color: #d9f3ef;
+    border-color: #1f9d8b;
+    border-width: 2px;
+  }
+
+  .coach-text {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 19px;
+    color: #11544b;
+  }
+
+  .took {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #dff3e4;
+    border-color: #2b8a3e;
+    border-width: 2px;
+  }
+
+  .took-text {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 19px;
+    color: #1d5a2a;
+  }
+
+  .took-button {
+    flex-grow: 1;
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
+  .split {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #ece8fd;
+    border-color: #6741d9;
+    border-width: 2px;
+  }
+
+  .split-text {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 19px;
+    color: #3b2a8c;
+  }
+
+  .options {
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #eef1f5;
+    border-color: #5b616b;
+    border-width: 2px;
+  }
+
+  .option-button {
+    flex-grow: 1;
+    flex-basis: 0;
+    justify-content: center;
+  }
+
+  .draft-body {
+    font-size: 14px;
+    line-height: 18px;
+    color: #1f2328;
+    white-space: pre-line;
+  }
+
+  .undo-button {
+    flex-shrink: 0;
+    justify-content: center;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .nudge-button {
+    flex-grow: 1;
+    justify-content: center;
+  }
+</style>
+<Panel id="planner-root" class="panel-root">
+  <div class="row">
+    <div id="heading-text" class="heading">Today</div>
+    <Button id="hours-down" class="step-button">
+      <ButtonLabel>-1h</ButtonLabel>
+    </Button>
+    <Button id="hours-up" class="step-button">
+      <ButtonLabel>+1h</ButtonLabel>
+    </Button>
+    <Button id="options-button" class="step-button">
+      <ButtonLabel>Options</ButtonLabel>
+    </Button>
+  </div>
+  <div id="draft-card" class="options" style="display: none">
+    <div id="draft-title" class="recap-title">Draft</div>
+    <div id="draft-lines" style="flex-direction: column; gap: 3px">
+      <div id="draft-line-0" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-1" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-2" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-3" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-4" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-5" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-6" class="draft-body" style="display: none">-</div>
+      <div id="draft-line-7" class="draft-body" style="display: none">-</div>
+    </div>
+    <div id="draft-next" class="jar">Next:</div>
+    <div id="draft-buttons" class="row">
+      <Button id="draft-move" class="xr-button"><ButtonLabel>Move sheet</ButtonLabel></Button>
+      <Button id="draft-close" class="xr-button"><ButtonLabel>Done reading</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="options-card" class="options" style="display: none">
+    <div class="label">Options</div>
+    <div id="opt-row-1" class="row">
+      <Button id="opt-large" class="option-button"><ButtonLabel id="opt-large-label">Larger tiles: Off</ButtonLabel></Button>
+      <Button id="opt-contrast" class="option-button"><ButtonLabel id="opt-contrast-label">High contrast: Off</ButtonLabel></Button>
+    </div>
+    <div id="opt-row-2" class="row">
+      <Button id="opt-motion" class="option-button"><ButtonLabel id="opt-motion-label">Reduce motion: Off</ButtonLabel></Button>
+      <Button id="opt-sound" class="option-button"><ButtonLabel id="opt-sound-label">Sound: On</ButtonLabel></Button>
+    </div>
+    <div id="opt-row-3" class="row">
+      <Button id="opt-look" class="option-button"><ButtonLabel id="opt-look-label">Look to select: Off</ButtonLabel></Button>
+    </div>
+    <Button id="opt-done" class="xr-button"><ButtonLabel>Done</ButtonLabel></Button>
+  </div>
+  <div id="coach-card" class="coach" style="display: none">
+    <div id="coach-text" class="coach-text">Start with your day</div>
+    <Button id="coach-example" class="xr-button" style="display: none"><ButtonLabel>Try an example morning</ButtonLabel></Button>
+  </div>
+  <div id="capacity-text" class="capacity">Now 0h / 5h</div>
+  <div id="next-text" class="label" style="display: none">Next: </div>
+  <Divider></Divider>
+  <div id="add-label" class="label">Add task</div>
+  <div id="add-row" class="row">
+    <Button id="add-15" class="add-button"><ButtonLabel>15m</ButtonLabel></Button>
+    <Button id="add-30" class="add-button"><ButtonLabel>30m</ButtonLabel></Button>
+    <Button id="add-60" class="add-button"><ButtonLabel>1h</ButtonLabel></Button>
+    <Button id="add-120" class="add-button"><ButtonLabel>2h</ButtonLabel></Button>
+  </div>
+  <div id="nudge-card" class="nudge" style="display: none">
+    <div id="nudge-text" class="nudge-text">Now is over your day.</div>
+    <div class="row">
+      <Button id="nudge-accept" class="nudge-button"><ButtonLabel>Move to Later</ButtonLabel></Button>
+      <Button id="nudge-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="split-card" class="split" style="display: none">
+    <div id="split-text" class="split-text">That is a big one. Split it into smaller steps?</div>
+    <div class="row">
+      <Button id="split-accept" class="nudge-button"><ButtonLabel>Split it</ButtonLabel></Button>
+      <Button id="split-dismiss" class="nudge-button"><ButtonLabel>Keep</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="took-card" class="took" style="display: none">
+    <div id="took-text" class="took-text">How long did it take?</div>
+    <div class="row">
+      <Button id="took-less" class="took-button"><ButtonLabel>Quicker</ButtonLabel></Button>
+      <Button id="took-same" class="took-button"><ButtonLabel>About right</ButtonLabel></Button>
+      <Button id="took-more" class="took-button"><ButtonLabel>Longer</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="recap-card" class="recap" style="display: none">
+    <div class="recap-title">Wind down</div>
+    <div id="recap-text" class="recap-text">Today you planned 0h and finished 0h.</div>
+    <div class="row">
+      <Button id="recap-end" class="nudge-button"><ButtonLabel>End day</ButtonLabel></Button>
+      <Button id="recap-cancel" class="nudge-button"><ButtonLabel>Not yet</ButtonLabel></Button>
+    </div>
+  </div>
+  <div id="tile-actions" class="row" style="display: none">
+    <div id="tile-actions-text" class="label" style="flex-grow: 1; flex-shrink: 1">This tile:</div>
+    <Button id="action-focus" class="undo-button"><ButtonLabel>Focus</ButtonLabel></Button>
+    <Button id="action-tomorrow" class="undo-button"><ButtonLabel>Tomorrow</ButtonLabel></Button>
+    <Button id="action-split" class="undo-button" style="display: none"><ButtonLabel>Split</ButtonLabel></Button>
+    <Button id="action-draft" class="undo-button"><ButtonLabel>Draft</ButtonLabel></Button>
+  </div>
+  <div id="status-row" class="row">
+    <div id="status-text" class="status" style="flex-grow: 1; flex-shrink: 1">Pinch a tile and drop it in a zone</div>
+    <Button id="undo-button" class="undo-button" style="display: none"><ButtonLabel>Undo</ButtonLabel></Button>
+  </div>
+  <div id="jar-text" class="jar">Done jar: 0 tasks, 0h</div>
+  <div class="row">
+    <Button id="winddown-button" class="xr-button"><ButtonLabel id="winddown-label">Wind down</ButtonLabel></Button>
+    <Button id="move-tray-button" class="xr-button" style="display: none"><ButtonLabel id="movetray-label">Move tray</ButtonLabel></Button>
+    <Button id="dictate-button" class="xr-button" style="display: none"><ButtonLabel id="dictate-label">Dictate</ButtonLabel></Button>
+    <Button id="xr-button" class="xr-button"><ButtonLabel>Enter XR</ButtonLabel></Button>
+    <Button id="exit-button" class="xr-button" style="display: none"><ButtonLabel>Exit</ButtonLabel></Button>
+  </div>
+</Panel>
